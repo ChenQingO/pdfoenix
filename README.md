@@ -39,6 +39,14 @@
 | **对抗式复核** | 转写与复核使用不同模型，按风险抽页，抽中即整页全核                           |
 | **可插拔**     | `Transcriber` 协议、抽样策略、风险权重、阈值与概率均为配置项                 |
 
+## 当前进度
+
+- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/experiment/calibrate` 全部可用。
+- 抽样已加入绝对/相对下限：公式稀疏的书也会随机补齐到 `min_pages` / `min_rate`，不会几乎不抽。
+- `books/an_introduction` 已完成状态重建：1531 条公式、章节进度、悬空锚点白名单。
+- `pdfoenix check` 无错误；`pdfoenix build` 可生成 EPUB；`pdfoenix inspect` 通过。
+- 全量 `pytest`、`ruff`、duplicate-code 检查通过。
+
 ## 工作原理
 
 ```text
@@ -217,6 +225,8 @@ high_min = 125
 low_prob = 0.01
 medium_prob = 0.09
 high_prob = 0.60
+min_pages = 10           # 绝对下限：公式稀疏的书也至少抽这么多页
+min_rate = 0.10          # 相对下限：至少抽候选页的 10%
 seed = 0
 ```
 
@@ -236,6 +246,10 @@ seed = 0
 
 风险分档来自实测标定：页风险 `≤50 / 51–125 / >125` 对应抽样概率 `1% / 9% / 60%`，
 期望约 10% 页，`budget` 仅作硬封顶。
+
+抽样有“下限 + 上限”：先按风险概率抽页；若不足
+`max(min_pages, ceil(min_rate × 候选页数))`，从剩余页中随机补齐；候选页总数少于
+该下限时全部抽取。这样公式稀疏的书也不会因为风险带为空而几乎不抽样。
 
 ## 成本与质量
 
@@ -269,6 +283,35 @@ start.sh           # 环境配置脚本
 ```
 
 `books/` 是本地数据目录（PDF、书稿、页图、日志、构建产物），已在 `.gitignore` 中忽略，不进入仓库。
+
+## 实时看板
+
+`pdfoenix watch` 是**只读**的，不会启动或推进流水线。它读取
+`state/progress.json` 和 `logs/pipeline.db`，所以要和写这些文件的命令并行运行。
+
+```bash
+# 终端 1：跑流水线
+pdfoenix -C books/an_introduction transcribe
+
+# 终端 2：同时看看板
+pdfoenix -C books/an_introduction watch
+
+# 只看一帧
+pdfoenix -C books/an_introduction watch --once
+
+# 调整刷新间隔（秒）
+pdfoenix -C books/an_introduction watch --interval 2
+```
+
+`pdfoenix transcribe && pdfoenix watch` 也能跑，但 `watch` 会在 transcribe
+**结束后**才启动，看不到转写过程；想看实时进度，请用两个终端，或：
+
+```bash
+pdfoenix -C books/an_introduction transcribe &
+pdfoenix -C books/an_introduction watch
+```
+
+按 `Ctrl-C` 退出看板。未安装 `rich` 时自动回退为纯文本帧。
 
 ## 开发
 

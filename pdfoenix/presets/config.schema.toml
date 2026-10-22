@@ -38,6 +38,8 @@ high_min = 125
 low_prob = 0.01
 medium_prob = 0.09
 high_prob = 0.60
+min_pages = 10
+min_rate = 0.10
 seed = 0
 
 [sampling.risk_weights]

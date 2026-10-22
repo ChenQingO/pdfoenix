@@ -45,6 +45,8 @@ DEFAULT_CONFIG = {
         "low_prob": 0.01,          # per-page sampling probabilities by band
         "medium_prob": 0.09,
         "high_prob": 0.60,
+        "min_pages": 10,           # absolute floor, even for formula-sparse books
+        "min_rate": 0.10,          # minimum fraction of candidate pages to sample
         "seed": 0,                 # deterministic sampling by default
     },
     "review": {"global_audit": True},
@@ -89,13 +91,13 @@ def validate_config(cfg: dict) -> None:
     if sampling["page_risk"] not in {"max", "sum"}:
         raise ConfigError("sampling.page_risk must be 'max' or 'sum'")
 
-    for key in ("low_max", "high_min", "seed"):
+    for key in ("low_max", "high_min", "seed", "min_pages"):
         value = sampling[key]
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ConfigError(f"sampling.{key} must be a non-negative integer")
     if sampling["low_max"] >= sampling["high_min"]:
         raise ConfigError("sampling.low_max must be smaller than sampling.high_min")
-    for key in ("low_prob", "medium_prob", "high_prob"):
+    for key in ("low_prob", "medium_prob", "high_prob", "min_rate"):
         value = sampling[key]
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise ConfigError(f"sampling.{key} must be a number")

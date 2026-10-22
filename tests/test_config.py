@@ -20,6 +20,8 @@ def test_defaults_when_no_file():
     assert cfg["sampling"]["low_max"] == 50
     assert cfg["sampling"]["high_min"] == 125
     assert cfg["sampling"]["high_prob"] == 0.60
+    assert cfg["sampling"]["min_pages"] == 10
+    assert cfg["sampling"]["min_rate"] == 0.10
     assert cfg["review"]["global_audit"] is True
     assert cfg["logging"]["level"] == "info"
 

@@ -227,12 +227,15 @@ risk = 2×(_ ^ 计数) + 3×(\frac \sqrt) + 3×(\hat \bar \tilde)
 1. 每条公式算 risk → 聚合到页（page_risk = max 或 sum，默认 max）
 2. 用全书经验分布定抽样概率 p(page_risk)，单调递增
 3. 独立伯努利抽页；不归一化，靠硬预算封顶
+4. 下限保护：不足 max(min_pages, ceil(min_rate × 候选页数)) 时，从剩余页随机补齐；
+   候选页少于下限则全抽（公式稀疏的书不会被跳过）
 ```
 
 **首轮标定**（2026-10-22，1531 条公式；旧批次缺页锚点，页面分布为估算）：
 公式风险中位数 28、P90 77；页风险中位数约 54、P90 约 124。采用
 `低 ≤50 / 中 51–125 / 高 >125`，抽样概率 `1% / 9% / 60%`，在本数据上期望约 10%；
-`budget = "20%"` 只是硬上限，不是目标。权重或阈值变更后由标定流程重算。
+`budget = "20%"` 只是硬上限，不是目标。`min_pages = 10`、`min_rate = 0.10` 是抽样下限，
+保证公式稀疏的书仍有最低复查覆盖率。权重或阈值变更后由标定流程重算。
 
 > 风险分权重、p(risk) 形状、预算数值**实施后实测标定**（用现有 an_introduction 全书公式算出真实分布 + 一批全量复核实测「错误率 vs 风险分」再拟合）。标定不影响架构，只换配置。
 
@@ -339,6 +342,8 @@ high_min = 125                  # 页风险 > high_min 为高风险
 low_prob = 0.01                 # 各档每页抽样概率（不归一化）
 medium_prob = 0.09
 high_prob = 0.60
+min_pages = 10                  # 绝对下限（公式稀疏的书也至少抽这么多页）
+min_rate = 0.10                 # 相对下限（至少抽候选页的 10%）
 seed = 0                        # 确定性抽样
 
 [review]
@@ -398,6 +403,8 @@ verbose = false                 # 开则落 LLM 全文 I/O
      抽样概率 `1% / 9% / 60%`，本数据期望约 10%；`budget=20%` 仅作硬上限。
    - `sampling` 暴露 `SamplingStrategy` 协议，默认 `risk_distribution`，换策略不改主流程。
    - `audit` 默认 dry-run，仅返回命中位置；批量替换需显式 `dry_run=False`。
+   - 抽样下限：`min_pages=10`、`min_rate=10%`；风险抽样不足时从剩余页随机补齐，
+     候选页少于下限则全抽，避免公式稀疏的书被几乎跳过。
 6. [x] **预设与脚手架**（2026-10-22）：`presets/` 全套（epub.css、opencode.jsonc、
    transcribe.md、verify.md、pricing.toml、config.schema.toml）；`scaffold.py` + `init`；
    `cli.py` 全部子命令（init/scout/render/transcribe/merge/verify/assets/check/build/

@@ -43,6 +43,14 @@ It does not aim for a pixel-perfect copy. It aims for:
 | **Adversarial review**  | Transcription and verification use different models; risky pages are sampled and fully reviewed                     |
 | **Pluggable**           | The `Transcriber` protocol, sampling strategy, risk weights, thresholds, and probabilities are all configurable     |
 
+## Current status
+
+- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/experiment/calibrate` are all available.
+- Sampling now has absolute and relative floors: formula-sparse books are filled randomly to `min_pages` / `min_rate` instead of being almost skipped.
+- `books/an_introduction` has been reindexed: 1531 formulas, chapter progress, and a dangling-anchor whitelist.
+- `pdfoenix check` is clean; `pdfoenix build` produces an EPUB; `pdfoenix inspect` passes.
+- Full `pytest`, `ruff`, and duplicate-code checks pass.
+
 ## How it works
 
 ```text
@@ -228,6 +236,8 @@ high_min = 125
 low_prob = 0.01
 medium_prob = 0.09
 high_prob = 0.60
+min_pages = 10           # absolute floor for formula-sparse books
+min_rate = 0.10          # at least 10% of candidate pages
 seed = 0
 ```
 
@@ -247,6 +257,11 @@ For example, `thinking = "high"` produces `mimo/mimo-v2.6-pro#high`.
 
 The risk bands come from calibration: page risk `≤50 / 51–125 / >125` maps to sampling
 probabilities `1% / 9% / 60%`, about 10% of pages on average. `budget` is only a hard ceiling.
+
+Sampling has a floor and a ceiling. First pages are drawn by risk probability. If the result is
+below `max(min_pages, ceil(min_rate × candidate_pages))`, uniformly random remaining pages are
+added until the floor is reached. If the book has fewer candidate pages than the floor, every page
+is sampled. This prevents formula-sparse books from being almost entirely skipped.
 
 ## Cost and quality
 

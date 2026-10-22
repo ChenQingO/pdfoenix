@@ -93,13 +93,36 @@ def test_budget_is_a_hard_ceiling(tmp_path):
                        for p in range(1, 11)},
         formulas={f"eq{p}": {"risk": 500} for p in range(1, 11)},
     )
-    settings = SamplingSettings(high_prob=1.0, budget="20%", seed=1)
+    settings = SamplingSettings(high_prob=1.0, budget="20%", seed=1,
+                                min_pages=0, min_rate=0)
     result = sample_pages(book, settings=settings, rng=random.Random(1))
     assert result.expected_pages == 10
     assert result.budget_pages == 2
     assert len(result.selected_pages) == 2
     assert result.budget_trimmed is True
     assert result.selected_pages == sorted(result.selected_pages)
+
+
+def test_sparse_formula_book_is_filled_to_the_minimum(tmp_path):
+    book = make_book(tmp_path, list(range(1, 101)),
+                     page_formulas={}, formulas={})
+    settings = SamplingSettings(low_prob=0.01, medium_prob=0.09, high_prob=0.60,
+                                min_pages=10, min_rate=0.10, budget="20%", seed=3)
+    result = sample_pages(book, settings=settings, rng=random.Random(3))
+    assert result.target_pages == 10
+    assert len(result.selected_pages) == 10
+    assert len(set(result.selected_pages)) == 10
+    assert result.filled_pages
+    assert set(result.filled_pages) <= set(result.selected_pages)
+
+
+def test_tiny_book_is_sampled_completely(tmp_path):
+    book = make_book(tmp_path, list(range(1, 6)), page_formulas={}, formulas={})
+    settings = SamplingSettings(min_pages=10, min_rate=0.10, budget="20%", seed=4)
+    result = sample_pages(book, settings=settings, rng=random.Random(4))
+    assert result.target_pages == 5
+    assert result.selected_pages == [1, 2, 3, 4, 5]
+    assert result.budget_pages == 5
 
 
 def test_seed_makes_selection_reproducible(tmp_path):

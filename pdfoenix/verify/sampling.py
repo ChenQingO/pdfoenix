@@ -19,10 +19,14 @@ high         ``> 125``       60%
 ===========  ==============  =================
 
 No normalization is applied.  Independent Bernoulli draws at these rates give
-an expected sample of about 10% of pages for this distribution.  The ``budget``
-setting is a hard ceiling (default 20%); if random draws exceed it, the excess is
-trimmed.  This keeps cost predictable while still oversampling hard pages.
+an expected sample of about 10% of pages for this distribution.  Formula-sparse
+books would otherwise sample too little, so ``min_pages``/``min_rate`` define a
+floor: after the risk draw, uniformly random remaining pages are added until the
+floor is reached (the whole book if it is smaller than the floor).  ``budget`` is
+a hard ceiling (default 20%) for the risk draw; the floor can raise that ceiling
+for very small books so the absolute minimum is always respected.
 """
+import math
 import random
 import re
 from collections.abc import Mapping
@@ -54,6 +58,8 @@ class SamplingSettings:
     low_prob: float = 0.01
     medium_prob: float = 0.09
     high_prob: float = 0.60
+    min_pages: int = 10
+    min_rate: float = 0.10
     seed: int = 0
 
     @classmethod
@@ -71,6 +77,8 @@ class SamplingSettings:
             low_prob=float(raw.get("low_prob", 0.01)),
             medium_prob=float(raw.get("medium_prob", 0.09)),
             high_prob=float(raw.get("high_prob", 0.60)),
+            min_pages=int(raw.get("min_pages", 10)),
+            min_rate=float(raw.get("min_rate", 0.10)),
             seed=int(raw.get("seed", 0)),
         )
         settings.validate()
@@ -82,10 +90,13 @@ class SamplingSettings:
             raise SamplingError("sampling.page_risk must be 'max' or 'sum'")
         if not 0 <= self.low_max < self.high_min:
             raise SamplingError("sampling.low_max must be below sampling.high_min")
-        for name in ("low_prob", "medium_prob", "high_prob"):
+        for name in ("low_prob", "medium_prob", "high_prob", "min_rate"):
             value = getattr(self, name)
             if not 0 <= value <= 1:
                 raise SamplingError(f"sampling.{name} must be between 0 and 1")
+        if (not isinstance(self.min_pages, int) or isinstance(self.min_pages, bool)
+                or self.min_pages < 0):
+            raise SamplingError("sampling.min_pages must be a non-negative integer")
         if not isinstance(self.budget, (int, str)) or isinstance(self.budget, bool):
             raise SamplingError("sampling.budget must be an integer or a percentage")
         if self.seed < 0:
@@ -117,7 +128,9 @@ class SamplingResult:
     page_risks: dict[int, int]
     bands: dict[str, list[int]] = field(default_factory=dict)
     expected_pages: float = 0.0
+    target_pages: int = 0
     budget_pages: int = 0
+    filled_pages: list[int] = field(default_factory=list)
     budget_trimmed: bool = False
     seed: int = 0
     strategy: str = "risk_distribution"
@@ -155,20 +168,34 @@ class RiskDistributionStrategy:
             bands[settings.band(risk)].append(page)
             probabilities[page] = settings.probability(risk)
 
-        selected = [page for page in pages if rng.random() < probabilities[page]]
-        budget_pages = _budget_pages(settings.budget, len(pages))
+        selected = {page for page in pages if rng.random() < probabilities[page]}
+        target_pages = min(
+            len(pages),
+            max(settings.min_pages, math.ceil(len(pages) * settings.min_rate)),
+        )
+        raw_budget = _budget_pages(settings.budget, len(pages))
+        budget_pages = min(len(pages), max(raw_budget, target_pages))
         trimmed = False
         if len(selected) > budget_pages:
-            selected = sorted(rng.sample(selected, budget_pages))
+            selected = set(rng.sample(sorted(selected), budget_pages))
             trimmed = True
 
+        filled: list[int] = []
+        if len(selected) < target_pages:
+            remaining = [page for page in pages if page not in selected]
+            needed = target_pages - len(selected)
+            filled = rng.sample(remaining, min(needed, len(remaining)))
+            selected.update(filled)
+
         return SamplingResult(
-            selected_pages=selected,
+            selected_pages=sorted(selected),
             candidate_pages=pages,
             page_risks=dict(page_risks),
             bands=bands,
             expected_pages=sum(probabilities.values()),
+            target_pages=target_pages,
             budget_pages=budget_pages,
+            filled_pages=sorted(filled),
             budget_trimmed=trimmed,
             seed=settings.seed,
             strategy=settings.strategy,
