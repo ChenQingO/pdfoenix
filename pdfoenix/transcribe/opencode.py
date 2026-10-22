@@ -47,6 +47,11 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECAS
 _OUTER_FENCE_RE = re.compile(
     r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 _DIGITS_RE = re.compile(r"\d+")
+# A model that ignores the tool-free contract sometimes answers with tool-call
+# markup instead of text.  That is a failed call, never a transcription.
+_TOOL_MARKUP_RE = re.compile(
+    r"^\s*(?:```[a-z]*\s*)?<(?:function=|function_call|tool_call|invoke)",
+    re.IGNORECASE)
 
 
 class OpenCodeError(RuntimeError):
@@ -432,6 +437,11 @@ class OpenCodeTranscriber:
                 text=text, session_id=session_id, returncode=result.returncode,
                 stderr=stderr, latency_ms=latency_ms,
                 error=f"exit code {result.returncode}: {stderr.strip()}")
+        if text and _TOOL_MARKUP_RE.match(text):
+            return _CallOutcome(
+                text=text, session_id=session_id, returncode=result.returncode,
+                stderr=stderr, latency_ms=latency_ms,
+                error="model returned tool-call markup instead of text")
         usage = self._session_usage(session_id)
         return _CallOutcome(
             text=text, session_id=session_id, returncode=result.returncode,
@@ -498,7 +508,13 @@ class OpenCodeTranscriber:
         """Write one call attempt (success or failure) to the cost ledger."""
         model_info = outcome.usage.get("model") or {}
         configured = self.config.get("models", {}).get(stage, {})
-        model = str(model_info.get("id") or configured.get("model") or "")
+        model = str(model_info.get("id") or "")
+        if not model:
+            # No session export (the call failed early): fall back to the
+            # configured ``provider/model`` spec and record the bare model id,
+            # so successful and failed calls group under one key.
+            fallback = str(configured.get("model") or "")
+            model = fallback.split("/", 1)[-1] if fallback else ""
         provider = str(model_info.get("providerID") or PROVIDER_NAME)
         thinking = str(configured.get("thinking") or "")
         status = "ok" if outcome.ok else "failed"
@@ -545,11 +561,17 @@ class OpenCodeTranscriber:
         return corrections
 
     def _model_spec(self, stage: str) -> str:
-        """Build ``provider/model#variant`` from the configured model + thinking."""
+        """Build ``provider/model#variant`` from the configured model + thinking.
+
+        ``""`` and ``"default"`` select the provider's default behaviour and add
+        no suffix; any other value is an explicit variant and is passed through,
+        including ``"none"`` for gateways (DeepSeek) that expose it as a real
+        variant meaning "no thinking".
+        """
         spec = self.config.get("models", {}).get(stage, {})
         model = str(spec.get("model") or "").strip()
         thinking = str(spec.get("thinking") or "").strip()
-        if model and thinking not in {"", "default", "none"}:
+        if model and thinking not in {"", "default"}:
             return f"{model}#{thinking}"
         return model
 

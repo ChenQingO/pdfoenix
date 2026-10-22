@@ -88,6 +88,19 @@ def build(tmp_path, runner, ledger, config=None):
         tmp_path, config or make_config(), runner=runner, telemetry=ledger)
 
 
+def test_model_spec_maps_thinking_to_variant(tmp_path, telemetry):
+    # "" and "default" add no suffix; every other value is an explicit variant,
+    # including "none" for gateways that expose it (DeepSeek).
+    cases = [("", "vendor/writer"), ("default", "vendor/writer"),
+             ("none", "vendor/writer#none"), ("high", "vendor/writer#high")]
+    for thinking, expected in cases:
+        config = make_config()
+        config["models"]["transcribe"] = {"model": "vendor/writer",
+                                          "thinking": thinking}
+        model = build(tmp_path, FakeRunner(["x"]), telemetry, config)
+        assert model._model_spec("transcribe") == expected
+
+
 def test_transcribe_single_batch_returns_text_and_records_call(tmp_path, telemetry):
     runner = FakeRunner(["# Heading"])
     model = build(tmp_path, runner, telemetry, make_config(batch_pages=5))
@@ -164,6 +177,9 @@ def test_failed_process_raises_and_is_recorded(tmp_path, telemetry):
     row = telemetry.fetch_calls()[0]
     assert row["status"] == "failed"
     assert "quota exceeded" in row["error"]
+    # No session export on failure: fall back to the configured spec and record
+    # the bare model id so failed calls group with successful ones.
+    assert row["model"] == "writer"
 
 
 def test_error_event_with_zero_exit_is_a_failure(tmp_path, telemetry):
@@ -194,6 +210,14 @@ def test_empty_output_is_an_error(tmp_path, telemetry):
     model = build(tmp_path, FakeRunner([""]), telemetry)
     with pytest.raises(OpenCodeError, match="empty"):
         model.transcribe(make_images(tmp_path, [1]), "x")
+
+
+def test_tool_call_markup_is_recorded_as_failure(tmp_path, telemetry):
+    markup = "<function=execute>list files</function>"
+    model = build(tmp_path, FakeRunner([markup]), telemetry)
+    with pytest.raises(OpenCodeError, match="tool-call markup"):
+        model.transcribe(make_images(tmp_path, [1]), "x")
+    assert telemetry.fetch_calls()[0]["status"] == "failed"
 
 
 def test_verify_parses_corrections_and_splits_aligned_chunks(tmp_path, telemetry):

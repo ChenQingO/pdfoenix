@@ -238,7 +238,9 @@ seed = 0
 适配器会把 `model` + `thinking` 拼成 `provider/model#variant`，通过
 `opencode run --model ...` 传给对应 agent，所以两个 agent 天然可以使用不同模型。
 
-`thinking = "default"` 或 `"none"` 表示不附加 variant；其他值会变成 `#<value>`。
+`thinking = "default"`（或留空）表示不附加 variant；其他值会变成 `#<value>` 并作为显式 variant
+传给网关，包括 `thinking = "none"`（DeepSeek 网关把它作为真实 variant，如
+`deepseek/deepseek-v4-pro#none`）。
 例如 `thinking = "high"` 会生成 `mimo/mimo-v2.6-pro#high`。
 
 > 具体有哪些 variant 由模型和网关决定。当前 MiMo 网关只接受 `default`；

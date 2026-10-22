@@ -249,7 +249,9 @@ seed = 0
 The adapter builds `provider/model#variant` from `model` + `thinking` and passes it to the
 corresponding agent as `opencode run --model ...`, so the two agents can use different models.
 
-`thinking = "default"` or `"none"` means no variant suffix. Any other value becomes `#<value>`.
+`thinking = "default"` (or empty) means no variant suffix. Any other value becomes `#<value>`
+and is passed to the gateway as an explicit variant, including `thinking = "none"` for gateways
+that expose `none` as a real variant (DeepSeek: `deepseek/deepseek-v4-pro#none`).
 For example, `thinking = "high"` produces `mimo/mimo-v2.6-pro#high`.
 
 > The available variants depend on the model and gateway. The current MiMo gateway only accepts
