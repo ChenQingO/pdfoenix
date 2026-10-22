@@ -1,9 +1,12 @@
 """Dashboard tests (TDD)."""
+import io
+
 import fitz
+import pytest
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.telemetry import Telemetry
-from pdfoenix.watch import dashboard_data, render_dashboard
+from pdfoenix.watch import _watch_rich, dashboard_data, render_dashboard, watch
 
 
 def make_book(tmp_path):
@@ -49,3 +52,59 @@ def test_dashboard_data_and_text(tmp_path):
     assert "Dashboard Book" in text
     assert "ch01" in text
     assert "3 formulas" in text
+
+
+class FakeTTY(io.StringIO):
+    """StringIO that claims to be a terminal."""
+
+    def isatty(self):
+        return True
+
+
+def test_watch_plain_redraws_in_place_on_tty(tmp_path, monkeypatch):
+    book = make_book(tmp_path)
+    stream = FakeTTY()
+    monkeypatch.setattr("sys.stdout", stream)
+    monkeypatch.setattr("pdfoenix.watch._rich_available", lambda: False)
+    watch(book, interval=0, iterations=2)
+    output = stream.getvalue()
+    assert output.count("Dashboard Book") == 2
+    assert output.count("\033[H\033[J") == 2
+
+
+def test_watch_plain_dedupes_when_not_a_tty(tmp_path, monkeypatch, capsys):
+    book = make_book(tmp_path)
+    monkeypatch.setattr("pdfoenix.watch._rich_available", lambda: False)
+    watch(book, interval=0, iterations=3)
+    out = capsys.readouterr().out
+    assert out.count("Dashboard Book") == 1
+    assert "\033[" not in out
+
+
+def test_watch_plain_prints_frames_that_changed(tmp_path, monkeypatch, capsys):
+    book = make_book(tmp_path)
+    monkeypatch.setattr("pdfoenix.watch._rich_available", lambda: False)
+    pending = [True]
+
+    def fake_sleep(_interval):
+        if pending and pending.pop():
+            telemetry = Telemetry(tmp_path)
+            telemetry.record_call(stage="transcribe", role="transcribe",
+                                  model="m", input_text_tokens=1)
+            telemetry.close()
+
+    monkeypatch.setattr("pdfoenix.watch.time.sleep", fake_sleep)
+    watch(book, interval=0, iterations=3)
+    out = capsys.readouterr().out
+    assert out.count("Dashboard Book") == 2
+
+
+def test_watch_rich_renders_frames_in_place(tmp_path):
+    pytest.importorskip("rich")
+    from rich.console import Console
+
+    book = make_book(tmp_path)
+    stream = io.StringIO()
+    _watch_rich(book, 0, 2, console=Console(file=stream, force_terminal=True,
+                                            width=80))
+    assert stream.getvalue().count("Dashboard Book") == 2

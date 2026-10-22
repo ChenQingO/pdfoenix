@@ -7,11 +7,16 @@ works in a minimal environment.
 """
 import json
 import sqlite3
+import sys
 import time
+from typing import TYPE_CHECKING
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.telemetry import compute_cost
 from pdfoenix.report import load_pricing
+
+if TYPE_CHECKING:
+    from rich.table import Table
 
 
 def dashboard_data(book: Book) -> dict:
@@ -42,15 +47,33 @@ def render_dashboard(book: Book) -> str:
 
 
 def watch(book: Book, *, interval: float = 1.0, iterations: int | None = None) -> None:
-    """Render the dashboard until interrupted (or ``iterations`` frames)."""
-    rich_available = _rich_available()
+    """Refresh the dashboard in place until interrupted (or ``iterations`` frames).
+
+    On a terminal the frame is redrawn at the same spot: Rich's alternate
+    screen when Rich is installed, ANSI cursor moves otherwise.  When stdout is
+    not a terminal (a pipe, a log file, a captured session) nothing can be
+    redrawn in place, so frames are only printed when their content changed.
+    """
+    in_place = sys.stdout.isatty()
+    if in_place and _rich_available():
+        _watch_rich(book, interval, iterations)
+    else:
+        _watch_plain(book, interval, iterations, in_place=in_place)
+
+
+def _watch_plain(book: Book, interval: float, iterations: int | None, *,
+                 in_place: bool) -> None:
+    """Plain-text loop: redraw at the top of the screen, or print on change."""
+    last = None
     frame = 0
     try:
         while True:
-            if rich_available:
-                _render_rich(book)
-            else:
-                print("\033[2J\033[H" + render_dashboard(book), flush=True)
+            text = render_dashboard(book)
+            if in_place:
+                print("\033[H\033[J" + text, flush=True)
+            elif text != last:
+                print(text, flush=True)
+            last = text
             frame += 1
             if iterations is not None and frame >= iterations:
                 return
@@ -166,8 +189,28 @@ def _rich_available() -> bool:
     return True
 
 
-def _render_rich(book: Book) -> None:
+def _watch_rich(book: Book, interval: float, iterations: int | None, *,
+                console=None) -> None:
+    """Rich loop: one alternate screen, redrawn in place by ``Live``."""
     from rich.console import Console
+    from rich.live import Live
+
+    console = console or Console()
+    frame = 0
+    try:
+        with Live(console=console, screen=True, auto_refresh=False) as live:
+            while True:
+                live.update(_rich_table(book), refresh=True)
+                frame += 1
+                if iterations is not None and frame >= iterations:
+                    return
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        return
+
+
+def _rich_table(book: Book) -> "Table":
+    """Build the Rich table for one dashboard frame."""
     from rich.table import Table
 
     data = dashboard_data(book)
@@ -183,5 +226,4 @@ def _render_rich(book: Book) -> None:
     table.caption = (
         f"${totals['cost']:.2f} · {totals['calls']} calls · "
         f"{_format_tokens(totals['tokens'])} tokens · {totals['agents']} agents")
-    Console().clear()
-    Console().print(table)
+    return table
