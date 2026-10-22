@@ -3,12 +3,63 @@
 # Add one table per model id as recorded in logs/pipeline.db.  Prices are applied
 # at report time, so changing this file never rewrites historical token data.
 #
-# [pricing."mimo-v2.6-flash"]
-# input_text = 0.0
-# input_vision = 0.0
-# output = 0.0
+# Sources: the rates published by the model gateway (2026-10-22).  The gateway
+# quotes one input rate; input_vision is billed at the same rate as input_text,
+# and the adapter currently records every input token as input_text anyway.
+
+[pricing."mimo-v2.6-flash"]
+input_text = 0.14
+input_vision = 0.14
+output = 0.28
+
+[pricing."mimo-v2.6-pro"]
+input_text = 0.435
+input_vision = 0.435
+output = 0.87
+
+[pricing."mimo-v2.6-pro-ultraspeed"]
+input_text = 4.35
+input_vision = 4.35
+output = 8.7
 
 [pricing."deepseek-v4-pro"]
-input_text = 1.0
-input_vision = 3.0
-output = 5.0
+input_text = 0.66
+input_vision = 0.66
+output = 1.98
+
+[pricing."deepseek-flash"]
+input_text = 0.15
+input_vision = 0.15
+output = 0.6
+
+# Free tiers served by the OpenCode provider: explicitly zero-priced so that a
+# 0.0 cost in reports is known to be real rather than "price unknown".
+[pricing."nemotron-3.5-super-vl-free"]
+input_text = 0.0
+input_vision = 0.0
+output = 0.0
+
+[pricing."minimax-m3.1-flash-free"]
+input_text = 0.0
+input_vision = 0.0
+output = 0.0
+
+[pricing."flint-40b-free"]
+input_text = 0.0
+input_vision = 0.0
+output = 0.0
+
+[pricing."glm-5.3-flash-free"]
+input_text = 0.0
+input_vision = 0.0
+output = 0.0
+
+[pricing."deepseek-v4.1-flash-free"]
+input_text = 0.0
+input_vision = 0.0
+output = 0.0
+
+[pricing."mimo-v2.6-flash-free"]
+input_text = 0.0
+input_vision = 0.0
+output = 0.0

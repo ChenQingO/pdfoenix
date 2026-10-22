@@ -24,6 +24,7 @@
       "models": {
         "mimo-v2.6-flash": { "name": "MiMo v2.6 Flash" },
         "mimo-v2.6-pro": { "name": "MiMo v2.6 Pro" },
+        "mimo-v2.6-pro-ultraspeed": { "name": "MiMo v2.6 Pro Ultra" },
         "mimo-v2.5": { "name": "MiMo v2.5" }
       }
     }
