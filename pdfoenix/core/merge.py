@@ -36,8 +36,12 @@ class MergeError(ValueError):
 
 # A page anchor occupies its own line.
 PAGE_RE = re.compile(r"^\s*<!--\s*page\s*:\s*(\d+)\s*-->\s*$")
-# The chapter title line (a h1 starting with "Chapter").
-H1_RE = re.compile(r"^#\s+Chapter\b.*$")
+# The chapter title line (a h1 starting with "Chapter", in any capitalization).
+H1_RE = re.compile(r"^#\s+Chapter\b.*$", re.IGNORECASE)
+# The pieces of a chapter title, used to normalize model output such as
+# "# CHAPTER 1 Introduction" into "# Chapter 1. Introduction {#ch-1}".
+_TITLE_RE = re.compile(r"^#\s+chapter\s+(\d+)\b[.:]?\s*(.*)$", re.IGNORECASE)
+_ANCHOR_TAIL_RE = re.compile(r"\{#([A-Za-z0-9_-]+)\}\s*$")
 # A section heading; group 1 is its first token, e.g. "3.2" or "Problems".
 H2_RE = re.compile(r"(?m)^##\s+(\S+)")
 # A printed equation number written as "\qquad (N)".
@@ -152,6 +156,29 @@ def chapter_number(chapter: str) -> str:
     if not match:
         raise MergeError(f"cannot parse a chapter number from {chapter!r}")
     return str(int(match.group(1)))
+
+
+def _normalize_chapter_title(line: str) -> str:
+    """Normalize a model-written chapter heading to the manuscript convention.
+
+    Models often echo the printed ``CHAPTER 1``/``# CHAPTER 1 Introduction``
+    form.  The manuscript always stores ``# Chapter N. Title {#ch-N}`` so that
+    ``check`` sees an anchored h1 and the build gets a stable label.
+    """
+    match = _TITLE_RE.match(line.strip())
+    if match is None:
+        return line.strip()
+    number = int(match.group(1))
+    rest = match.group(2).strip()
+    anchor = f"{{#ch-{number}}}"
+    tail = _ANCHOR_TAIL_RE.search(rest)
+    if tail is not None:
+        anchor = tail.group(0)
+        rest = rest[:tail.start()].strip()
+    rest = rest.lstrip(".:").strip()
+    if rest:
+        return f"# Chapter {number}. {rest} {anchor}"
+    return f"# Chapter {number} {anchor}"
 
 
 def section_filename(chapter: str, key: str) -> str:
@@ -443,6 +470,8 @@ def merge_chapter(book: Book, chapter: str, overrides: MergeOverrides | None = N
             title = line.strip()
             continue
         kept.append(line)
+    if title:
+        title = _normalize_chapter_title(title)
     stream = "\n".join(kept)
 
     # Split into sections by line index, injecting the page in effect at each

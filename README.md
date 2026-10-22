@@ -2,195 +2,157 @@
 
 把**扫描版 PDF**（尤其是数学密集的古旧书）重建为现代排版的 **EPUB**。
 
-核心目标不是复刻原书版式，而是：
-
-- **文字绝对准确**（唯一硬指标）
-- 公式 LaTeX 忠实、保留原书编号
-- 图、表、公式可寻址、可复核、可重做
-- 成本可记账、质量可对比，方便持续做成本-质量实验
-
+文字必须准确；公式用 LaTeX 并保留原书编号；图、表、公式可复核；模型调用有成本账本。
 设计细节见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-## 特性
+## 环境结论
 
-- **确定性优先**：渲染、侦察、合并、校验、构建全部是纯脚本；LLM 只出现在“看图转写”和“看图复核”。
-- **文件即状态**：所有中间产物、注册表、日志落盘，中断可续跑。
-- **页锚点**：转写阶段写入 `<!-- page:N -->`，merge 后建立公式/图/表与页图的双向索引。
-- **对象模型**：图 = 裁图文件；表 = Markdown；公式 = 可寻址 LaTeX 对象。
-- **成本账本**：每次 LLM 调用记录模型、思考档、text/vision/output token，可 JOIN 纠错记录。
-- **对抗式复核**：转写与复核默认使用不同模型；按风险抽页，抽中整页全核。
-- **可插拔**：`Transcriber` 协议、抽样策略、风险权重、阈值与概率都是配置项。
+**使用 `uv` + 项目内 `.venv`，不使用 conda。**
 
-## 安装
+`uv` 负责安装 Python 3.12、创建 `.venv`、安装依赖；所有东西都在项目目录里，
+不污染系统 Python。conda 对这个项目没有额外价值，反而更重。
 
-要求 Python 3.12+，并安装 `pandoc`（用于生成 EPUB）。
+系统外部只需要：
+
+- Node.js 20+（用于 OpenCode）
+- 一个模型网关的 API Key
+- PDF 需要带文字层；纯图片扫描件请先 OCR
+
+`pandoc` 和 `opencode` 缺失时，`start.sh` 会尝试自动安装。
+
+## 安装环境（只需一次）
 
 ```bash
-pip install -e .
+git clone https://github.com/<你的用户名>/pdfoenix.git
+cd pdfoenix
+./start.sh
+source .venv/bin/activate
 ```
 
-模型调用使用本地 [OpenCode](https://opencode.ai/)：
+`start.sh` **只负责环境配置，不会运行任何书稿流程**：
+
+1. 安装 `uv`（如果还没有）；
+2. 用 `uv` 创建 `.venv` 并安装 Python 3.12；
+3. 安装 pdfoenix 依赖；
+4. 检查/安装 `pandoc` 和 `opencode`。
+
+看到 `Environment ready.` 后，环境就绪。
+
+## 开始做书
+
+第一次先只跑一章：
 
 ```bash
-npx opencode --version
-# 或使用已全局安装的 opencode
-```
-
-`rich` 用于 `pdfoenix watch` 看板；未安装时自动回退为纯文本。
-
-## 快速开始
-
-```bash
-# 1. 创建一本书的目录、配置和预设
 pdfoenix init books/my_book \
-  --pdf path/to/source.pdf \
+  --pdf /path/to/book.pdf \
   --title "Book Title" \
   --author "Author" \
-  --page-offset 0
+  --page-offset 18
 
-cd books/my_book
-
-# 2. 侦察结构并渲染页面
-pdfoenix scout
-pdfoenix render
-
-# 3. 分批转写
-pdfoenix transcribe
-
-# 4. 合并为章节 Markdown，并注册公式/图/表
-pdfoenix merge
-
-# 5. 裁图（可选；复核页 300 dpi 重渲染由 verify 自动完成）
-pdfoenix assets
-
-# 6. 抽样复核 + 全局审计
-pdfoenix verify
-
-# 7. 校验、构建、验收
-pdfoenix check
-pdfoenix build
-pdfoenix inspect
+pdfoenix -C books/my_book scout
+pdfoenix -C books/my_book transcribe --chapter ch01
+pdfoenix -C books/my_book merge --chapter ch01
+pdfoenix -C books/my_book verify --chapter ch01 --full
+pdfoenix -C books/my_book build
 ```
 
-所有命令都接受全局 `-C/--book`，也可以在书目录内直接运行：
+确认这一章没问题后，再跑完整本书：
 
 ```bash
-pdfoenix -C books/an_introduction check
+pdfoenix -C books/my_book transcribe
+pdfoenix -C books/my_book merge
+pdfoenix -C books/my_book assets
+pdfoenix -C books/my_book verify
+pdfoenix -C books/my_book check
+pdfoenix -C books/my_book build
+pdfoenix -C books/my_book inspect
+```
+
+产物在：
+
+```text
+books/my_book/build/book.epub
+```
+
+中断后重新执行同一条命令即可续跑：已完成的转写批次和复核页会跳过。
+
+## 模型配置（只需一次）
+
+API Key 放进环境变量，不要提交到 Git：
+
+```bash
+export MIMO_API_KEY="你的密钥"
+```
+
+把它写进 `~/.zshrc` 或 `~/.bashrc`，然后重新打开终端。
+
+网关配置放在 `~/.config/opencode/opencode.jsonc`：
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "providers": {
+    "mimo": {
+      "name": "MiMo",
+      "canonical": "xiaomi",
+      "settings": {
+        "baseURL": "https://your-gateway.example.com/v1",
+        "apiKey": "{env:MIMO_API_KEY}"
+      },
+      "models": {
+        "mimo-v2.6-flash": { "name": "MiMo v2.6 Flash" },
+        "mimo-v2.6-pro": { "name": "MiMo v2.6 Pro" }
+      }
+    }
+  }
+}
+```
+
+书的模型选择在 `books/my_book/config.toml`：
+
+```toml
+[models.transcribe]
+model = "mimo/mimo-v2.6-flash"
+thinking = "default"
+
+[models.verify]
+model = "mimo/mimo-v2.6-pro"   # 必须与 transcribe 不同
+thinking = "default"
 ```
 
 ## 常用命令
 
-| 命令 | 作用 |
-|------|------|
-| `pdfoenix init <book> --pdf a.pdf` | 脚手架：目录、`config.toml`、预设、空注册表 |
-| `pdfoenix scout` | 扫描 PDF 文字层 → `state/scout.json` |
-| `pdfoenix render` | 渲染 150 dpi 页图 → `working/pages/` |
-| `pdfoenix transcribe` | 分页批转写 → `working/batches/` |
-| `pdfoenix merge` | 合并批次、切节、注册对象 → `manuscript/` |
-| `pdfoenix verify` | 风险抽样复核；`--full` 全量复核 |
-| `pdfoenix assets` | 图裁图；自动检测或使用注册表里的 `crop` |
-| `pdfoenix check` | 编号、脚注、链接、注册表、残留检查 |
-| `pdfoenix build` | 拼装 → pandoc → EPUB → 后处理 |
-| `pdfoenix inspect` | EPUB 结构验收（nav/spine/MathML/章末注） |
-| `pdfoenix watch` | 只读实时看板 |
-| `pdfoenix report --by model\|chapter` | 成本汇总 |
-| `pdfoenix experiment --by model --metric cost,error_rate` | 成本-质量对比 |
-| `pdfoenix calibrate` | 公式/页风险分布报告 |
+```bash
+pdfoenix -C books/my_book report --by model     # 成本/token
+pdfoenix -C books/my_book watch                 # 实时看板
+pdfoenix -C books/my_book check                 # 校验
+pdfoenix -C books/my_book build                 # 生成 EPUB
+```
 
-## 目录结构
+`cost_usd` 默认可能是 0：在 `books/my_book/presets/pricing.toml` 里填入服务商单价即可。
+token 数始终会真实记录。
+
+## 仓库与推送
+
+只推送代码和测试：
 
 ```text
-pdfoenix/                 # 包源代码
-├── core/                 # 确定性内核（无 LLM）
-├── transcribe/           # Transcriber 协议 + OpenCode 适配
-├── verify/               # 抽样、页内容恢复、全局审计
-├── assets/               # 图裁图、复核页渲染
-├── presets/              # epub.css / opencode.jsonc / 任务书 / 单价 / 默认配置
-├── cli.py                # 命令编排
-├── scaffold.py           # init
-├── report.py             # 成本/实验报告
-├── calibrate.py          # 风险分布
-├── inspect.py            # EPUB 验收
-└── watch.py              # 看板
-books/
-└── an_introduction/      # 第一个测试对象/回归 fixture
-tests/                    # 单元与集成测试
+pdfoenix/  tests/  pyproject.toml  start.sh  README.md  ARCHITECTURE.md  .gitignore
 ```
 
-一本书的目录：
+`books/` 已在 `.gitignore` 中忽略，包含 PDF、书稿、页图、日志和构建产物，不会推送。
+如果旧仓库里已经跟踪了 `books/`，执行一次：
 
-```text
-<book>/
-├── config.toml
-├── presets/              # init 复制的预设
-├── known_dangling.txt    # 合法悬空锚点白名单
-├── styles/epub.css
-├── source/               # PDF、封面
-├── manuscript/           # chNN/00_chapter.md、secX-Y.md、tabX-Y.md
-├── figures/              # figX-Y.png
-├── working/              # pages/、verify/、zoom/、batches/
-├── state/                # scout/formulas/figures/tables/corrections/progress
-├── logs/                 # pipeline.log、pipeline.db
-├── build/                # book.md、*.epub
-└── legacy/               # 旧人工流水线归档（不参与构建）
+```bash
+git rm -r --cached books
 ```
 
-## 配置
-
-`config.toml` 只需写与默认值不同的项，缺失项由 `pdfoenix/presets/config.schema.toml` 补齐。关键配置：
-
-```toml
-[book]
-title = "Book Title"
-author = "Author"
-pdf = "source/book.pdf"
-page_offset = 18          # PDF 页 = 印刷页 + offset
-
-[pipeline]
-batch_pages = 5
-render_dpi = 150
-verify_dpi = 300
-verify_chunk_size = 5
-
-[models.transcribe]
-model = "provider/model"
-thinking = "default"
-
-[models.verify]
-model = "provider/other-model"   # 必须与 transcribe 不同
-thinking = "default"
-
-[sampling]
-page_risk = "max"
-budget = "20%"           # 硬上限；概率目标约 10%
-low_max = 50
-high_min = 125
-low_prob = 0.01
-medium_prob = 0.09
-high_prob = 0.60
-seed = 0
-```
-
-风险分档来自实测标定：公式风险中位数 28、P90 77；页风险分档 `≤50 / 51–125 / >125`，对应抽样概率 `1% / 9% / 60%`，期望约 10% 页，`budget` 仅作硬封顶。
+这不会删除本地文件。
 
 ## 开发
 
 ```bash
+uv pip install -e ".[dev]"
 pytest
 ruff check pdfoenix tests
-pylint --disable=all --enable=duplicate-code pdfoenix
 ```
-
-- 代码注释与 docstring 使用英文。
-- 每个模块配套测试；改注释/重构后必须 `pytest` 全绿。
-- 禁止 `\tag{}`、裸 `■`、无锚点标题；见 [ARCHITECTURE.md](ARCHITECTURE.md) §14。
-
-## 仓库说明
-
-`books/an_introduction` 是第一个真实测试对象，保留：
-
-- 已验证的 `manuscript/`、`figures/`、`build/`
-- 重新索引的 `state/formulas.json`（1531 条公式）与 `state/progress.json`
-- `legacy/` 下的旧人工流水线文档、批次、手工复核图
-
-大体积且可再生的文件（页图、legacy zoom、日志、构建缓存）已在 `.gitignore` 中排除。

@@ -34,7 +34,11 @@ equation, captions, tables, footnotes, cross-references, headings):
    `introduced` when the transcription silently changes it.
 
 Ignore purely cosmetic Markdown choices that do not change meaning, except when
-they break the book's required conventions (for example an unanchored heading).
+they break the book's required conventions. The required heading forms are
+`# Chapter N. Title {#ch-N}`, `## X.Y Title {#sec-X-Y}` and
+`### X.Y.Z Title {#sec-X-Y-Z}`. A section number in a heading never carries a
+trailing period, even when the scan prints one; that is a convention, not an
+error. Do not report a heading that already follows these forms.
 
 ## Output contract
 

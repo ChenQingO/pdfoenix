@@ -316,7 +316,9 @@ def cmd_report(args) -> int:
 def cmd_experiment(args) -> int:
     book = _book(args)
     rows = experiment_summary(book, by=args.by)
-    metrics = [metric.strip() for metric in args.metric.split(",") if metric.strip()]
+    aliases = {"cost": "cost_usd", "error_rate": "error_rate_per_100_pages"}
+    metrics = {aliases.get(metric.strip(), metric.strip())
+               for metric in args.metric.split(",") if metric.strip()}
     columns = ("experiment_id", "key", "calls", "verify_pages", "corrections",
                "error_rate_per_100_pages", "cost_usd")
     selected = tuple(column for column in columns
@@ -505,7 +507,7 @@ def _cell(value) -> str:
 def _close(resource) -> None:
     close = getattr(resource, "close", None)
     if callable(close):
-        close
+        close()
 
 
 if __name__ == "__main__":

@@ -33,6 +33,9 @@ the PDF page number of every attachment. Read **all** images before writing.
 
 ## Structure and headings
 
+- Chapter opening: exactly one line, `# Chapter N. Full Title {#ch-N}` (for
+  example `# Chapter 1. Introduction {#ch-1}`). Do not also emit the printed
+  all-caps `CHAPTER N` line separately.
 - Section heading: `## X.Y Full Title {#sec-X-Y}`.
 - Subsection heading: `### X.Y.Z Full Title {#sec-X-Y-Z}` (no trailing period in
   the number).

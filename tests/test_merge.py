@@ -313,3 +313,12 @@ def test_no_section_raises(tmp_path):
     book = make_book(tmp_path, {"p100-100": "# Chapter 3. T {#ch-3}\n\nprose\n"})
     with pytest.raises(MergeError):
         merge_chapter(book, "ch03")
+
+
+def test_chapter_title_normalized(tmp_path):
+    batch = BATCH.replace(
+        "# Chapter 3. Test Chapter {#ch-3}", "# CHAPTER 3 Test Chapter")
+    book = make_book(tmp_path, {"p100-102": batch})
+    merge_chapter(book, "ch03")
+    assert sec(book, "00_chapter.md").strip() == \
+        "# Chapter 3. Test Chapter {#ch-3}"

@@ -452,7 +452,10 @@ class OpenCodeTranscriber:
         """Export one session and return its aggregate token usage and model."""
         if not session_id:
             return {}
-        argv = [*self.command, "session", "export", session_id]
+        # ``--sanitize`` redacts attachment payloads.  Without it the export
+        # embeds every base64 page image, and the JSON is truncated when Node
+        # exits before a full pipe write drains -- losing the token counts.
+        argv = [*self.command, "session", "export", "--sanitize", session_id]
         try:
             result = self._runner(
                 argv, cwd=self.workdir, env=self._subprocess_env(), timeout=120)
@@ -472,8 +475,13 @@ class OpenCodeTranscriber:
         tokens = info.get("tokens")
         if not isinstance(tokens, dict):
             tokens = {}
+        cache = tokens.get("cache")
+        cache_read = _as_int(cache.get("read")) if isinstance(cache, dict) else 0
         return {
-            "input": _as_int(tokens.get("input")),
+            # ``input`` excludes prompt-cache hits; count them as input too so
+            # that cost accounting reflects every token the provider billed.
+            "input": _as_int(tokens.get("input")) + cache_read,
+            "cache_read": cache_read,
             "output": _as_int(tokens.get("output")),
             "reasoning": _as_int(tokens.get("reasoning")),
             "model": info.get("model") if isinstance(info.get("model"), dict) else {},

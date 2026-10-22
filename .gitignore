@@ -1,3 +1,6 @@
+# Local book data (PDFs, manuscripts, rendered pages, logs, builds)
+books/
+
 # OS / editor
 .DS_Store
 .idea/

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pdfoenix.core.book import Book
 
-PAGE_RE = re.compile(r"^\s*<!--\s*page\s*:\s*(\d+)\s*-->\s*$")
+PAGE_RE = re.compile(r"^\s*<!--\s*page\s*:\s*(\d+)\s*-->\s*$", re.MULTILINE)
 _BATCH_RE = re.compile(r"p(\d+)-")
 
 

@@ -27,5 +27,8 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "A", "SIM", "RET", "ARG", "UP", "RUF"]
 
+[tool.setuptools.packages.find]
+include = ["pdfoenix*"]
+
 [tool.setuptools.package-data]
 pdfoenix = ["presets/*"]
