@@ -1,0 +1,248 @@
+/* Default modern academic EPUB style for pdfoenix. */
+
+/* Links: one modern blue, no underline, underline on hover. */
+a {
+  color: #1a5fb4;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+body {
+  font-size: 90%;
+  line-height: 1.35;
+  text-align: justify;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  widows: 2;
+  orphans: 2;
+}
+
+h1, h2, h3, h4 {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-weight: 600;
+  page-break-after: avoid;
+  text-align: left;
+  hyphens: none;
+  -webkit-hyphens: none;
+}
+
+h1 {
+  /* Do NOT add page-break-before: it creates a blank page at file start and
+   TOC anchors land on that blank page. One file per chapter already breaks. */
+  font-size: 1.5em;
+  margin-top: 2em;
+  margin-bottom: 1.6em;
+}
+
+h2 {
+  font-size: 1.15em;
+  margin-top: 2em;
+  margin-bottom: 0.7em;
+}
+
+h3 {
+  font-size: 1em;
+  font-style: italic;
+  margin-top: 1.6em;
+  margin-bottom: 0.5em;
+}
+
+/* Slightly smaller math reduces clipping in reflowable readers. */
+math {
+  font-size: 0.92em;
+}
+
+math[display="block"] {
+  margin: 1em 0;
+  font-size: 0.88em;
+}
+
+p {
+  margin: 0 0 0.7em 0;
+}
+
+/* Block quotes, tables and figure captions. */
+blockquote {
+  margin: 1em 1.5em;
+  font-size: 0.95em;
+  color: #333333;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 1.2em auto;
+  font-size: 0.9em;
+}
+
+th, td {
+  padding: 0.35em 0.8em;
+  border-bottom: 1px solid #cccccc;
+  text-align: left;
+}
+
+th {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-weight: 600;
+  border-bottom: 1.5px solid #888888;
+}
+
+figure {
+  margin: 1.4em auto;
+  text-align: center;
+}
+
+figure img {
+  max-width: 100%;
+}
+
+figcaption {
+  font-size: 0.85em;
+  color: #444444;
+  margin-top: 0.5em;
+  text-align: left;
+}
+
+/* In-book Contents page. */
+.toc-page ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.3em 0;
+}
+
+.toc-page ul ul {
+  padding-left: 1.3em;
+}
+
+.toc-page li {
+  margin: 0.4em 0;
+}
+
+.toc-page > ul > li {
+  margin-top: 0.9em;
+  font-weight: 600;
+}
+
+.toc-page > ul > li > ul > li {
+  font-weight: normal;
+  margin: 0.3em 0;
+}
+
+/* Disable the ordered-list counter in nav.xhtml: otherwise its "1."
+   combines with the printed "1.1" and renders as "1.1.1". */
+nav ol.toc {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.3em 0;
+}
+
+nav ol.toc ol.toc {
+  padding-left: 1.2em;
+}
+
+nav li {
+  margin: 0.25em 0;
+}
+
+/* Footnotes.  pandoc emits a bare text marker (no <sup>), so force the
+   superscript here.  Post-processing turns notes into chapter-end notes. */
+a.footnote-ref {
+  color: #1a5fb4;
+  vertical-align: super;
+  font-size: 0.68em;
+  line-height: 1;
+  text-decoration: none;
+  padding: 0 0.1em;
+}
+
+a.footnote-ref:hover {
+  text-decoration: underline;
+}
+
+/* Chapter-end notes. */
+section.footnotes {
+  margin-top: 2.5em;
+}
+
+h3.notes-heading {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 0.95em;
+  font-weight: 600;
+  font-style: normal;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+  text-align: left;
+  margin: 2em 0 0.8em 0;
+  padding-top: 0.6em;
+  border-top: 1px solid #b0b0b0;
+}
+
+aside.footnote-end {
+  font-size: 0.92em;
+  line-height: 1.55;
+  text-align: left;
+  margin: 0 0 0.9em 0;
+  padding-left: 1.1em;
+  text-indent: -1.1em;
+  hyphens: none;
+  -webkit-hyphens: none;
+}
+
+aside.footnote-end p {
+  margin: 0;
+  text-indent: 0;
+  line-height: 1.55;
+  text-align: left;
+}
+
+/* Note number at the start of a hanging-indented note. */
+aside.footnote-end .note-num {
+  color: #1a5fb4;
+  font-size: 0.85em;
+  font-weight: 600;
+  margin-right: 0.35em;
+}
+
+/* Back-link to the reference. */
+a.footnote-back {
+  color: #1a5fb4;
+  text-decoration: none;
+  margin-left: 0.35em;
+  font-size: 0.92em;
+}
+
+a.footnote-back:hover {
+  text-decoration: underline;
+}
+
+/* References: hanging indent and muted section tags. */
+.ref-entry {
+  font-size: 0.92em;
+  line-height: 1.45;
+  text-align: left;
+  margin: 0 0 0.55em 0;
+  padding-left: 1.4em;
+  text-indent: -1.4em;
+  hyphens: none;
+  -webkit-hyphens: none;
+}
+
+.ref-usage {
+  color: #666666;
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+
+/* QED marker (the source prints a black square). */
+span.qed {
+  color: #999999;
+  font-size: 0.85em;
+  margin-left: 0.4em;
+}
+
+p.qed-line {
+  text-align: right;
+  margin: -0.4em 0 1em 0;
+}

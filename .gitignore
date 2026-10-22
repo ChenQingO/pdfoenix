@@ -1,0 +1,36 @@
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+/build/
+/dist/
+
+# Node
+node_modules/
+
+# Runtime logs
+books/*/logs/
+*.db
+*.db-shm
+*.db-wal
+
+# Regenerable working files
+books/*/working/pages/
+books/*/working/verify/
+books/*/working/zoom/
+books/*/working/batches/
+
+# Large archived QA crops (kept locally, not in git)
+books/*/legacy/zoom/
+
+# Temporary files
+*.tmp

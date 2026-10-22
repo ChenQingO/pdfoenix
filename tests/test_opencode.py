@@ -1,0 +1,270 @@
+"""OpenCode adapter tests: prompt assembly, fan-out, parsing and accounting."""
+import copy
+import json
+import re
+import subprocess
+
+import pytest
+
+from pdfoenix.core.config import DEFAULT_CONFIG
+from pdfoenix.core.telemetry import Telemetry
+from pdfoenix.transcribe.opencode import OpenCodeError, OpenCodeTranscriber
+
+
+class FakeRunner:
+    """Stand-in for subprocess.run that replays scripted agent answers."""
+
+    def __init__(self, texts=None, *, text_by_page=None, returncode=0, stderr="",
+                 timeout=False, usage=None):
+        self.texts = list(texts or [])
+        self.text_by_page = dict(text_by_page or {})
+        self.returncode = returncode
+        self.stderr = stderr
+        self.timeout = timeout
+        self.usage = usage or {
+            "input": 100, "output": 10, "reasoning": 5,
+            "model": {"id": "m1", "providerID": "p1"},
+        }
+        self.calls = []
+        self.index = 0
+
+    def _text_for(self, prompt):
+        pages = [int(value) for value in re.findall(r"page (\d+)", prompt)]
+        if self.text_by_page:
+            for page in pages:
+                if page in self.text_by_page:
+                    return self.text_by_page[page], f"ses_{page}"
+        text = self.texts[self.index] if self.texts else f"text-{self.index}"
+        self.index += 1
+        return text, f"ses_{self.index}"
+
+    def __call__(self, argv, *, cwd, env, timeout):
+        self.calls.append({"argv": argv, "cwd": cwd, "env": env,
+                           "timeout": timeout})
+        if self.timeout:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        if argv[2] == "session":
+            payload = {"info": {"model": self.usage["model"],
+                                "tokens": {key: self.usage[key]
+                                           for key in ("input", "output", "reasoning")}}}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+        text, session_id = self._text_for(argv[-1])
+        line = json.dumps({
+            "type": "text", "sessionID": session_id,
+            "part": {"type": "text", "text": text},
+        })
+        return subprocess.CompletedProcess(argv, self.returncode, line, self.stderr)
+
+    def run_calls(self):
+        return [call for call in self.calls if call["argv"][2] == "run"]
+
+
+def make_images(tmp_path, pages):
+    images = []
+    for page in pages:
+        path = tmp_path / f"pdfpage_{page:03d}.png"
+        path.write_bytes(b"png")
+        images.append(path)
+    return images
+
+
+def make_config(**pipeline):
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    config["pipeline"].update(pipeline)
+    config["models"]["transcribe"] = {"model": "vendor/writer", "thinking": "high"}
+    config["models"]["verify"] = {"model": "vendor/checker", "thinking": "low"}
+    return config
+
+
+@pytest.fixture
+def telemetry(tmp_path):
+    ledger = Telemetry(tmp_path, run_id="run-test")
+    yield ledger
+    ledger.close()
+
+
+def build(tmp_path, runner, ledger, config=None):
+    return OpenCodeTranscriber(
+        tmp_path, config or make_config(), runner=runner, telemetry=ledger)
+
+
+def test_transcribe_single_batch_returns_text_and_records_call(tmp_path, telemetry):
+    runner = FakeRunner(["# Heading"])
+    model = build(tmp_path, runner, telemetry, make_config(batch_pages=5))
+    result = model.transcribe(make_images(tmp_path, [399]), "Transcribe this page.")
+    assert result == "# Heading"
+
+    calls = runner.run_calls()
+    assert len(calls) == 1
+    argv = calls[0]["argv"]
+    assert argv[:2] == ["npx", "opencode"]
+    assert "--agent" in argv and "pdfoenix-transcribe" in argv
+    assert argv[argv.index("--model") + 1] == "vendor/writer#high"
+    assert "--file" in argv
+
+    rows = telemetry.fetch_calls()
+    assert len(rows) == 1
+    assert rows[0]["stage"] == "transcribe"
+    assert rows[0]["unit_id"] == "p399"
+    assert rows[0]["input_text_tokens"] == 100
+    assert rows[0]["output_tokens"] == 15
+    assert rows[0]["model"] == "m1"
+    assert rows[0]["provider"] == "p1"
+    assert rows[0]["status"] == "ok"
+
+
+def test_transcribe_fans_out_and_joins_in_order(tmp_path, telemetry):
+    runner = FakeRunner(text_by_page={10: "A", 12: "B", 14: "C"})
+    model = build(tmp_path, runner, telemetry, make_config(batch_pages=2))
+    result = model.transcribe(make_images(tmp_path, range(10, 16)), "notes")
+    assert result == "A\n\nB\n\nC"
+    assert len(runner.run_calls()) == 3
+    units = [row["unit_id"] for row in telemetry.fetch_calls()]
+    assert units == ["p10-11", "p12-13", "p14-15"]
+
+
+def test_transcribe_prompt_contains_task_book_and_page_numbers(tmp_path, telemetry):
+    runner = FakeRunner()
+    model = build(tmp_path, runner, telemetry)
+    model.transcribe(make_images(tmp_path, [42]), "Batch note: merge the paragraph.")
+    prompt = runner.run_calls()[0]["argv"][-1]
+    assert "Transcription task book" in prompt
+    assert "Batch note: merge the paragraph." in prompt
+    assert "page 42" in prompt
+    assert "<!-- page:N -->" in prompt
+
+
+def test_transcribe_strips_outer_markdown_fence(tmp_path, telemetry):
+    runner = FakeRunner(["```markdown\n## 1.1 Intro\n```"])
+    model = build(tmp_path, runner, telemetry)
+    assert model.transcribe(make_images(tmp_path, [7]), "x") == "## 1.1 Intro"
+
+
+def test_transcribe_sets_opencode_config_from_presets(tmp_path, telemetry):
+    runner = FakeRunner()
+    model = build(tmp_path, runner, telemetry)
+    model.transcribe(make_images(tmp_path, [1]), "x")
+    call = runner.run_calls()[0]
+    assert call["env"]["OPENCODE_CONFIG"].endswith("pdfoenix/presets/opencode.jsonc")
+    assert call["cwd"] == model.opencode_config.parent
+    assert (call["cwd"] / "opencode.jsonc").exists()
+
+
+def test_missing_image_raises(tmp_path, telemetry):
+    model = build(tmp_path, FakeRunner(), telemetry)
+    with pytest.raises(OpenCodeError, match="not found"):
+        model.transcribe([tmp_path / "missing.png"], "x")
+
+
+def test_failed_process_raises_and_is_recorded(tmp_path, telemetry):
+    runner = FakeRunner(returncode=2, stderr="quota exceeded")
+    model = build(tmp_path, runner, telemetry)
+    with pytest.raises(OpenCodeError, match="quota exceeded"):
+        model.transcribe(make_images(tmp_path, [1]), "x")
+    row = telemetry.fetch_calls()[0]
+    assert row["status"] == "failed"
+    assert "quota exceeded" in row["error"]
+
+
+def test_error_event_with_zero_exit_is_a_failure(tmp_path, telemetry):
+    class ErrorRunner(FakeRunner):
+        def __call__(self, argv, *, cwd, env, timeout):
+            if argv[2] == "run":
+                line = json.dumps({
+                    "type": "error", "sessionID": "ses_err",
+                    "error": {"type": "provider.auth", "message": "no credentials"},
+                })
+                return subprocess.CompletedProcess(argv, 0, line, "")
+            return super().__call__(argv, cwd=cwd, env=env, timeout=timeout)
+
+    model = build(tmp_path, ErrorRunner(), telemetry)
+    with pytest.raises(OpenCodeError, match="no credentials"):
+        model.transcribe(make_images(tmp_path, [1]), "x")
+    assert telemetry.fetch_calls()[0]["status"] == "failed"
+
+
+def test_timeout_is_recorded_as_failure(tmp_path, telemetry):
+    model = build(tmp_path, FakeRunner(timeout=True), telemetry)
+    with pytest.raises(OpenCodeError, match="timeout"):
+        model.transcribe(make_images(tmp_path, [1]), "x")
+    assert telemetry.fetch_calls()[0]["status"] == "failed"
+
+
+def test_empty_output_is_an_error(tmp_path, telemetry):
+    model = build(tmp_path, FakeRunner([""]), telemetry)
+    with pytest.raises(OpenCodeError, match="empty"):
+        model.transcribe(make_images(tmp_path, [1]), "x")
+
+
+def test_verify_parses_corrections_and_splits_aligned_chunks(tmp_path, telemetry):
+    content = (
+        "<!-- page:399 -->\nPage 399 text.\n"
+        "<!-- page:400 -->\nPage 400 text.\n"
+        "<!-- page:401 -->\nPage 401 text.\n"
+        "<!-- page:402 -->\nPage 402 text.\n")
+    first = (
+        "```json\n[{\"formula_id\": \"eq9-1-1\", \"severity\": \"introduced\","
+        " \"pattern\": \"sed→seb\", \"source\": \"ocr\", \"note\": \"p399\"}]\n```")
+    second = "[{\"severity\": \"style\", \"pattern\": \"x→y\"}]"
+    runner = FakeRunner(text_by_page={399: first, 401: second})
+    model = build(tmp_path, runner, telemetry, make_config(verify_chunk_size=2))
+    corrections = model.verify(make_images(tmp_path, [399, 400, 401, 402]), content)
+
+    assert len(corrections) == 2
+    assert corrections[0].unit_id == "p399-400"
+    assert corrections[0].formula_id == "eq9-1-1"
+    assert corrections[1].unit_id == "p401-402"
+    assert corrections[1].severity == "style"
+
+    calls = runner.run_calls()
+    assert len(calls) == 2
+    assert "--agent" in calls[0]["argv"]
+    assert "pdfoenix-verify" in calls[0]["argv"]
+    assert calls[0]["argv"][calls[0]["argv"].index("--model") + 1] == "vendor/checker#low"
+    assert "Page 399 text." in calls[0]["argv"][-1]
+    assert "Page 401 text." not in calls[0]["argv"][-1]
+    assert "Verification task book" in calls[0]["argv"][-1]
+
+
+def test_verify_without_anchors_falls_back_to_one_call(tmp_path, telemetry):
+    runner = FakeRunner(["[]"])
+    model = build(tmp_path, runner, telemetry, make_config(verify_chunk_size=1))
+    corrections = model.verify(
+        make_images(tmp_path, [1, 2, 3]), "unstructured transcription")
+    assert corrections == []
+    assert len(runner.run_calls()) == 1
+    assert len(runner.run_calls()[0]["argv"]) > 0
+
+
+def test_verify_untitled_block_still_batches(tmp_path, telemetry):
+    runner = FakeRunner(["[]", "[]"])
+    model = build(tmp_path, runner, telemetry, make_config(verify_chunk_size=2))
+    content = "<!-- page:10 -->\nA\n<!-- page:11 -->\nB\n<!-- page:12 -->\nC"
+    model.verify(make_images(tmp_path, [10, 11, 12]), content)
+    assert len(runner.run_calls()) == 2
+
+
+def test_verify_rejects_non_json_output(tmp_path, telemetry):
+    model = build(tmp_path, FakeRunner(["no issues found"]), telemetry)
+    with pytest.raises(OpenCodeError, match="no valid JSON"):
+        model.verify(make_images(tmp_path, [1]), "x")
+
+
+def test_verify_rejects_invalid_severity(tmp_path, telemetry):
+    runner = FakeRunner(['[{"severity": "major"}]'])
+    model = build(tmp_path, runner, telemetry)
+    with pytest.raises(OpenCodeError, match="invalid correction"):
+        model.verify(make_images(tmp_path, [1]), "x")
+
+
+def test_close_only_closes_owned_telemetry(tmp_path, telemetry):
+    model = build(tmp_path, FakeRunner(), telemetry)
+    model.close()
+    assert telemetry.fetch_calls() == []
+
+
+def test_context_manager_with_owned_telemetry(tmp_path):
+    with OpenCodeTranscriber(
+            tmp_path, make_config(), runner=FakeRunner()) as model:
+        assert (tmp_path / "logs" / "pipeline.db").exists()
+        assert model.opencode_config is not None

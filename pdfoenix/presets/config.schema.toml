@@ -1,0 +1,56 @@
+# Default pdfoenix configuration.  A book's config.toml may override any key;
+# missing keys are filled from these values by core.config.load_config.
+
+[book]
+title = ""
+author = ""
+pdf = ""
+page_offset = 0
+
+[pipeline]
+batch_pages = 5
+render_dpi = 150
+verify_dpi = 300
+verify_chunk_size = 5
+
+[transcriber]
+provider = "opencode"
+opencode_config = "presets/opencode.jsonc"
+
+[models.transcribe]
+model = ""
+thinking = "high"
+
+[models.verify]
+model = ""
+thinking = "high"
+
+[models.classify]
+model = ""
+thinking = "low"
+
+[sampling]
+strategy = "risk_distribution"
+page_risk = "max"
+budget = "20%"
+low_max = 50
+high_min = 125
+low_prob = 0.01
+medium_prob = 0.09
+high_prob = 0.60
+seed = 0
+
+[sampling.risk_weights]
+sub_sup = 2
+frac = 3
+hat = 3
+bold = 2
+matrix = 5
+bigop = 2
+
+[review]
+global_audit = true
+
+[logging]
+level = "info"
+verbose = false

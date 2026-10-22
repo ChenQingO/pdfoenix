@@ -1,0 +1,27 @@
+{
+  // Default OpenCode configuration for pdfoenix.
+  //
+  // The adapter points OPENCODE_CONFIG at this file and invokes one of the two
+  // agents below. Both agents are deliberately tool-free: page images arrive as
+  // attachments and every answer must be returned as text on stdout. The model
+  // and thinking variant are selected by the adapter from config.toml
+  // ([models.transcribe] / [models.verify]), so this file is safe to share.
+  "$schema": "https://opencode.ai/config.json",
+  "snapshots": false,
+  "agents": {
+    "pdfoenix-transcribe": {
+      "description": "Transcribe attached page scans into Markdown. Text output only.",
+      "mode": "primary",
+      "permissions": [
+        { "action": "*", "resource": "*", "effect": "deny" }
+      ]
+    },
+    "pdfoenix-verify": {
+      "description": "Audit a Markdown transcription against page scans. JSON output only.",
+      "mode": "primary",
+      "permissions": [
+        { "action": "*", "resource": "*", "effect": "deny" }
+      ]
+    }
+  }
+}

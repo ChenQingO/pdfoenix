@@ -1,0 +1,14 @@
+# Model prices in USD per 1,000,000 tokens.
+#
+# Add one table per model id as recorded in logs/pipeline.db.  Prices are applied
+# at report time, so changing this file never rewrites historical token data.
+#
+# [pricing."mimo-v2.6-flash"]
+# input_text = 0.0
+# input_vision = 0.0
+# output = 0.0
+
+[pricing."deepseek-v4-pro"]
+input_text = 1.0
+input_vision = 3.0
+output = 5.0
