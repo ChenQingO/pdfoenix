@@ -65,18 +65,18 @@ if ! command -v opencode >/dev/null 2>&1; then
   fi
 fi
 
-if [ ! -f "$HOME/.config/opencode/opencode.jsonc" ] && \
-   [ ! -f "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.jsonc" ]; then
-  echo "warning: ~/.config/opencode/opencode.jsonc not found." >&2
-  echo "         Configure your model gateway before calling a model." >&2
-fi
-
 cat <<EOF
 
 Environment ready.
 
 Activate it in this shell:
   source .venv/bin/activate
+
+Model gateway (project-local, no global OpenCode changes needed):
+  export MIMO_API_KEY="your-key"
+  After "pdfoenix init", edit books/<book>/presets/opencode.jsonc
+  and set providers.mimo.settings.baseURL to your gateway.
+  Do not edit ~/.config/opencode/opencode.jsonc.
 
 Then create a book and run the pipeline yourself:
   pdfoenix init books/my_book --pdf /path/to/book.pdf --title "Title" --author "Author" --page-offset 0
