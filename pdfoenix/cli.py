@@ -11,6 +11,7 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import fitz
 
@@ -74,6 +75,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     transcribe = sub.add_parser("transcribe", help="transcribe page batches")
     transcribe.add_argument("--chapter", help="only this chapter, e.g. ch09")
+    transcribe.add_argument("--pages", help="explicit page range, e.g. 19-30,40")
+    transcribe.add_argument("--experiment", help="experiment id for the cost ledger")
     transcribe.add_argument("--force", action="store_true", help="redo existing batches")
     transcribe.set_defaults(func=cmd_transcribe)
 
@@ -86,6 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--chapter", help="only this chapter")
     verify.add_argument("--pages", help="explicit page range, bypassing sampling")
     verify.add_argument("--force", action="store_true")
+    verify.add_argument("--experiment", help="experiment id for the cost ledger")
     verify.add_argument("--no-audit", action="store_true")
     verify.add_argument("--apply-audit", action="store_true",
                         help="apply global-audit replacements (otherwise dry-run)")
@@ -165,8 +169,11 @@ def cmd_transcribe(args) -> int:
         ranges = {name: value for name, value in ranges.items() if name == args.chapter}
     if not ranges:
         raise ValueError(f"chapter not found: {args.chapter}")
+    wanted = set(_parse_pages(args.pages, _pdf_pages(book))) if args.pages else None
+    if wanted is not None and not wanted:
+        raise ValueError(f"no pages match: {args.pages}")
     size = book.config["pipeline"]["batch_pages"]
-    telemetry = Telemetry(book.root)
+    telemetry = Telemetry(book.root, experiment_id=args.experiment)
     transcriber = _make_transcriber(book, telemetry)
     done = 0
     try:
@@ -174,8 +181,7 @@ def cmd_transcribe(args) -> int:
             directory = book.batches_dir / chapter
             directory.mkdir(parents=True, exist_ok=True)
             _write_task_file(book, chapter, start, end)
-            for first in range(start, end + 1, size):
-                last = min(end, first + size - 1)
+            for first, last in _batch_ranges(start, end, size, wanted):
                 target = directory / f"p{first}-{last}.md"
                 if target.exists() and not args.force:
                     continue
@@ -244,7 +250,7 @@ def cmd_verify(args) -> int:
     render_verify_pages(book, kept, force=args.force)
     images = [book.verify_dir / f"pdfpage_{page:03d}.png" for page in kept]
 
-    telemetry = Telemetry(book.root)
+    telemetry = Telemetry(book.root, experiment_id=args.experiment)
     transcriber = _make_transcriber(book, telemetry)
     try:
         corrections = transcriber.verify(images, content)
@@ -364,6 +370,32 @@ def _parse_pages(spec: str, total: int) -> list[int]:
     return sorted(page for page in pages if 1 <= page <= total)
 
 
+def _batch_ranges(start: int, end: int, size: int,
+                  wanted: set[int] | None) -> list[tuple[int, int]]:
+    """Split a chapter into batch ranges, honouring an explicit page selection.
+
+    With ``wanted`` unset the chapter is chunked from its first page, exactly as
+    before; with a selection only the chosen pages are kept, gaps start a new
+    run so a batch never spans unselected pages.
+    """
+    pages = [page for page in range(start, end + 1)
+             if wanted is None or page in wanted]
+    batches: list[tuple[int, int]] = []
+    run: list[int] = []
+    for page in pages:
+        if run and page != run[-1] + 1:
+            batches.extend(_chunk_run(run, size))
+            run = []
+        run.append(page)
+    batches.extend(_chunk_run(run, size))
+    return batches
+
+
+def _chunk_run(run: list[int], size: int) -> list[tuple[int, int]]:
+    return [(chunk[0], chunk[-1])
+            for chunk in (run[i:i + size] for i in range(0, len(run), size))]
+
+
 def _chapter_ranges(book: Book) -> dict[str, tuple[int, int]]:
     scout = book.state.load("scout")
     if not scout.get("chapters"):
@@ -421,14 +453,14 @@ def _save_corrections(book: Book, telemetry: Telemetry,
         data["corrections"].extend(dataclasses.asdict(item) for item in corrections)
 
     book.state.update("corrections", mutate)
-    for item in corrections:
+    for correction in corrections:
         telemetry.record_correction(
-            verify_call_id=item.call_id,
-            unit_id=item.unit_id,
-            formula_id=item.formula_id,
-            severity=item.severity,
-            pattern=item.pattern,
-            source=item.source,
+            verify_call_id=correction.call_id,
+            unit_id=correction.unit_id,
+            formula_id=correction.formula_id,
+            severity=correction.severity,
+            pattern=correction.pattern,
+            source=correction.source,
         )
 
 
@@ -504,9 +536,10 @@ def _cell(value) -> str:
     return str(value if value is not None else "")
 
 
-def _close(resource) -> None:
+def _close(resource: Any) -> None:
+    """Close ``resource`` when it offers close(); test doubles may omit it."""
     close = getattr(resource, "close", None)
-    if callable(close):
+    if close is not None:
         close()
 
 
