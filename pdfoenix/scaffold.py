@@ -10,11 +10,12 @@ import shutil
 from pathlib import Path
 
 from pdfoenix.core.book import Book
-from pdfoenix.core.config import DEFAULT_CONFIG, load_config
+from pdfoenix.core.config import DEFAULT_CONFIG, load_config, write_config
 from pdfoenix.core.state import StateStore
 
 _PRESET_FILES = (
     "opencode.jsonc",
+    "providers.toml",
     "transcribe.md",
     "verify.md",
     "pricing.toml",
@@ -86,7 +87,7 @@ def scaffold_book(
         config["book"]["page_offset"] = page_offset
     if not config["book"].get("title"):
         config["book"]["title"] = title or root.name.replace("_", " ").title()
-    _write_config(config_path, config)
+    write_config(config_path, config)
 
     state = StateStore(root)
     for name in ("scout", "formulas", "figures", "tables", "corrections", "progress"):
@@ -111,38 +112,3 @@ def _copy_pdf(root: Path, pdf, *, force: bool) -> Path | None:
     if source.resolve() != target.resolve() and (force or not target.exists()):
         shutil.copy2(source, target)
     return target
-
-
-def _write_config(path: Path, config: dict) -> None:
-    """Write the full merged configuration (init owns book metadata)."""
-    path.write_text(_dump_table(config) + "\n", encoding="utf-8")
-
-
-def _dump_table(data: dict, prefix: str = "") -> str:
-    scalars = {key: value for key, value in data.items() if not isinstance(value, dict)}
-    tables = {key: value for key, value in data.items() if isinstance(value, dict)}
-    lines = []
-    if prefix:
-        lines.append(f"[{prefix}]")
-    for key, value in scalars.items():
-        lines.append(f"{key} = {_toml_value(value)}")
-    if scalars and tables:
-        lines.append("")
-    for key, value in tables.items():
-        name = f"{prefix}.{key}" if prefix else key
-        lines.append(_dump_table(value, name))
-        lines.append("")
-    return "\n".join(lines).rstrip()
-
-
-def _toml_value(value) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return repr(value)
-    if isinstance(value, str):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
-    raise ScaffoldError(f"cannot serialize config value {value!r}")

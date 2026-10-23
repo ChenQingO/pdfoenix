@@ -1,0 +1,85 @@
+# Mainstream model providers for the ``pdfoenix expt`` wizard and combo setup.
+#
+# This file is a catalog: it stores connection TEMPLATES only.  API keys are
+# never written to disk -- ``api_key_env`` names the environment variable the
+# user must export.  The wizard (``pdfoenix expt``) and ``init --combo`` read
+# this file for Tab-completion; users may copy it to ``books/<book>/presets/
+# providers.toml`` and edit freely (the book copy wins).
+#
+# Curated 2026-10 from provider documentation.  ``models`` lists mainstream
+# vision-capable chat models; ids drift quickly, and the wizard accepts any
+# free-text ``provider/model#thinking`` you type.
+#
+# Thinking variants depend on the gateway; examples: deepseek ``none/low/high/
+# max``, qwen ``none/high``, MiMo ``default`` only.  The suffix after ``#`` is
+# passed through verbatim by the adapter.
+
+[providers.mimo]
+base_url = "https://api.xiaomimimo.com/v1"
+api_key_env = "MIMO_API_KEY"
+models = ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5"]
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+models = ["deepseek-flash", "deepseek-v4-pro"]
+
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+models = ["gpt-5", "gpt-5-mini", "gpt-4o"]
+
+[providers.anthropic]
+base_url = "https://api.anthropic.com/v1"
+api_key_env = "ANTHROPIC_API_KEY"
+models = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+
+[providers.gemini]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = "GEMINI_API_KEY"
+models = ["gemini-3-pro", "gemini-3-flash"]
+
+[providers.xai]
+base_url = "https://api.x.ai/v1"
+api_key_env = "XAI_API_KEY"
+models = ["grok-4-1-fast", "grok-4"]
+
+[providers.moonshot]
+base_url = "https://api.moonshot.ai/v1"
+api_key_env = "MOONSHOT_API_KEY"
+models = ["kimi-k2.6", "kimi-k3"]
+
+[providers.qwen]
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key_env = "DASHSCOPE_API_KEY"
+models = ["qwen3.5-plus", "qwen3-max"]
+
+[providers.zai]
+base_url = "https://api.z.ai/api/paas/v4"
+api_key_env = "ZAI_API_KEY"
+models = ["glm-5.3"]
+
+[providers.minimax]
+base_url = "https://api.minimax.io/v1"
+api_key_env = "MINIMAX_API_KEY"
+models = ["MiniMax-M2.7"]
+
+[providers.groq]
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+models = ["llama-3.3-70b-versatile"]
+
+[providers.mistral]
+base_url = "https://api.mistral.ai/v1"
+api_key_env = "MISTRAL_API_KEY"
+models = ["mistral-large-latest"]
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+models = ["openai/gpt-5", "anthropic/claude-sonnet-4-6", "google/gemini-3-pro"]
+
+[providers.ollama]
+base_url = "http://localhost:11434/v1"
+api_key_env = "OLLAMA_API_KEY"
+models = ["qwen3-vl", "llama-3.3-70b"]

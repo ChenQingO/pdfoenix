@@ -21,7 +21,7 @@ from pathlib import Path
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS llm_calls (
   call_id TEXT PRIMARY KEY,
-  run_id TEXT, experiment_id TEXT,
+  run_id TEXT, combo_id TEXT, batch_no INTEGER,
   stage TEXT, role TEXT,
   model TEXT, provider TEXT, thinking_mode TEXT, prompt_version TEXT,
   unit_id TEXT, n_images INTEGER,
@@ -41,6 +41,13 @@ CREATE INDEX IF NOT EXISTS idx_calls_run ON llm_calls(run_id);
 CREATE INDEX IF NOT EXISTS idx_calls_unit ON llm_calls(unit_id);
 CREATE INDEX IF NOT EXISTS idx_corr_unit ON corrections(unit_id);
 """
+
+# Older ledgers predate the combo/batch columns; extend them in place so cost
+# history survives.  ``experiment_id`` was the first name of ``combo_id``.
+_MIGRATIONS = (
+    ("llm_calls", "combo_id", "TEXT"),
+    ("llm_calls", "batch_no", "INTEGER"),
+)
 
 
 def _now() -> str:
@@ -62,35 +69,57 @@ class Telemetry:
     """Append-only cost ledger and event log for one book."""
 
     def __init__(self, book_root, run_id: str | None = None,
-                 experiment_id: str | None = None):
+                 combo_id: str | int | None = None,
+                 batch_no: int | None = None,
+                 db_path=None):
         self.book_root = Path(book_root)
         self.logs_dir = self.book_root / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.logs_dir / "pipeline.db"
-        self.log_path = self.logs_dir / "pipeline.log"
+        self.db_path = Path(db_path) if db_path is not None else self.logs_dir / "pipeline.db"
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.db_path.with_suffix(".log")
         self.run_id = run_id or f"run-{_now()}"
-        self.experiment_id = experiment_id
+        self.combo_id = str(combo_id) if combo_id is not None else None
+        self.batch_no = batch_no
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Extend ledgers written before the combo/batch columns existed."""
+        existing = {row["name"] for row in
+                    self._conn.execute("PRAGMA table_info(llm_calls)")}
+        for table, column, kind in _MIGRATIONS:
+            if column in existing:
+                continue
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+            existing.add(column)
+        if "experiment_id" in existing:
+            self._conn.execute(
+                "UPDATE llm_calls SET combo_id = experiment_id "
+                "WHERE combo_id IS NULL AND experiment_id IS NOT NULL")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_calls_combo ON llm_calls(combo_id)")
 
     # ── Writes ──────────────────────────────────────────────────────────
     def record_call(self, *, stage, role, model, provider="", thinking_mode="",
                     prompt_version="", unit_id="", n_images=0,
                     input_text_tokens=0, input_vision_tokens=0, output_tokens=0,
                     latency_ms=0, status="ok", retry_of=None, error=None,
-                    call_id=None, experiment_id=None, ts=None) -> str:
+                    call_id=None, combo_id=None, batch_no=None, ts=None) -> str:
         """Record one LLM call and return its id."""
         identifier = call_id or uuid.uuid4().hex
         self._conn.execute(
-            "INSERT INTO llm_calls (call_id, run_id, experiment_id, stage, role,"
-            " model, provider, thinking_mode, prompt_version, unit_id, n_images,"
-            " input_text_tokens, input_vision_tokens, output_tokens, latency_ms,"
-            " status, retry_of, error, ts) VALUES"
-            " (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO llm_calls (call_id, run_id, combo_id, batch_no, stage,"
+            " role, model, provider, thinking_mode, prompt_version, unit_id,"
+            " n_images, input_text_tokens, input_vision_tokens, output_tokens,"
+            " latency_ms, status, retry_of, error, ts) VALUES"
+            " (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, self.run_id,
-             experiment_id if experiment_id is not None else self.experiment_id,
+             str(combo_id) if combo_id is not None else self.combo_id,
+             batch_no if batch_no is not None else self.batch_no,
              stage, role, model, provider, thinking_mode, prompt_version,
              unit_id, n_images, input_text_tokens, input_vision_tokens,
              output_tokens, latency_ms, status, retry_of, error, ts or _now()),

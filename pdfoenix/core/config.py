@@ -51,6 +51,26 @@ DEFAULT_CONFIG = {
     },
     "review": {"global_audit": True},
     "logging": {"level": "info", "verbose": False},
+    # Model-combination experiments (``pdfoenix expt``).  A combo is the model
+    # pair behind the two billed agents; combos are append-only: to change one,
+    # create a new id or edit the file by hand.  Combo 1 is the quality winner
+    # of the 2026-10 benchmark (55 corrections/100 pages on dense math) and is
+    # provided by default; ``active`` selects the pair behind plain transcribe
+    # and verify.
+    "expt": {
+        "pages": "",               # benchmark page spec, e.g. "220-224,507-511"
+        "max_workers": 2,          # concurrent windows per combo
+        "attempts": 4,             # retries per window on transient failures
+        "active": 1,
+        "provider": [
+            {"name": "mimo", "base_url": "https://api.xiaomimimo.com/v1",
+             "api_key_env": "MIMO_API_KEY"},
+        ],
+        "combo": [
+            {"id": 1, "transcribe": "mimo/mimo-v2.6-pro-ultraspeed",
+             "verify": "mimo/mimo-v2.6-pro"},
+        ],
+    },
 }
 
 _LOG_LEVELS = {"debug", "info", "warning", "error"}
@@ -126,6 +146,84 @@ def validate_config(cfg: dict) -> None:
         if not isinstance(spec, dict) or "model" not in spec or "thinking" not in spec:
             raise ConfigError(f"models.{role} must define both 'model' and 'thinking'")
 
+    _validate_expt(cfg.get("expt", {}))
+
+
+def parse_model_spec(spec: str) -> tuple[str, str, str]:
+    """Split ``"provider/model#thinking"`` into its three parts.
+
+    ``thinking`` is empty when no variant suffix is present; ``model`` keeps
+    everything after the first slash so provider-qualified ids survive.
+    """
+    text = str(spec or "").strip()
+    if "#" in text:
+        text, thinking = text.split("#", 1)
+    else:
+        thinking = ""
+    if "/" not in text:
+        raise ConfigError(f"model spec must be 'provider/model', got {spec!r}")
+    provider, model = text.split("/", 1)
+    if not provider or not model:
+        raise ConfigError(f"model spec must be 'provider/model', got {spec!r}")
+    return provider, model, thinking.strip()
+
+
+def _validate_expt(expt: dict) -> None:
+    """Validate the ``[expt]`` table: providers, combos and their references."""
+    if not isinstance(expt, dict):
+        raise ConfigError("expt must be a table")
+
+    for key in ("max_workers", "attempts"):
+        value = expt.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ConfigError(f"expt.{key} must be a positive integer")
+    if not isinstance(expt.get("pages", ""), str):
+        raise ConfigError("expt.pages must be a page spec string")
+
+    providers = {}
+    for entry in expt.get("provider", []):
+        if not isinstance(entry, dict):
+            raise ConfigError("expt.provider entries must be tables")
+        name = str(entry.get("name") or "")
+        for key in ("base_url", "api_key_env"):
+            if not str(entry.get(key) or ""):
+                raise ConfigError(f"expt.provider {name or '?'} needs '{key}'")
+        if not name:
+            raise ConfigError("expt.provider entries need a 'name'")
+        if name in providers:
+            raise ConfigError(f"duplicate expt.provider {name!r}")
+        providers[name] = entry
+
+    combos = {}
+    for entry in expt.get("combo", []):
+        if not isinstance(entry, dict):
+            raise ConfigError("expt.combo entries must be tables")
+        combo_id = entry.get("id")
+        if (not isinstance(combo_id, int) or isinstance(combo_id, bool)
+                or combo_id <= 0):
+            raise ConfigError(f"expt.combo id must be a positive integer, "
+                              f"got {combo_id!r}")
+        if combo_id in combos:
+            raise ConfigError(f"duplicate expt.combo id {combo_id}")
+        specs = []
+        for role in ("transcribe", "verify"):
+            provider, model, _ = parse_model_spec(entry.get(role, ""))
+            if provider not in providers:
+                raise ConfigError(
+                    f"combo {combo_id} references undeclared provider "
+                    f"{provider!r}; add [[expt.provider]] for it")
+            specs.append(f"{provider}/{model}")
+        if specs[0] == specs[1]:
+            raise ConfigError(f"combo {combo_id} would judge its own output: "
+                              "verify must differ from transcribe")
+        combos[combo_id] = entry
+
+    active = expt.get("active", 0)
+    if not isinstance(active, int) or isinstance(active, bool) or active < 0:
+        raise ConfigError("expt.active must be a non-negative combo id")
+    if active and active not in combos:
+        raise ConfigError(f"expt.active references unknown combo {active}")
+
 
 def load_config(path=None, defaults=None) -> dict:
     """Load ``config.toml`` (optional), merge it over defaults, validate, return.
@@ -154,3 +252,59 @@ def load_config(path=None, defaults=None) -> dict:
 def risk_weights(cfg: dict) -> dict:
     """Return the effective risk weights (config values over defaults)."""
     return {**DEFAULT_WEIGHTS, **cfg["sampling"]["risk_weights"]}
+
+
+# ── Serialization (init and the expt wizard own config.toml writes) ──────
+def write_config(path, config: dict) -> None:
+    """Write a merged configuration as TOML (tables and arrays of tables)."""
+    from pathlib import Path
+
+    Path(path).write_text(dump_table(config) + "\n", encoding="utf-8")
+
+
+def dump_table(data: dict, prefix: str = "") -> str:
+    """Render a nested dict as TOML: scalars, tables and ``[[array]]`` tables."""
+    scalars = {}
+    tables = {}
+    arrays = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            tables[key] = value
+        elif isinstance(value, list) and value and all(
+                isinstance(item, dict) for item in value):
+            arrays[key] = value
+        else:
+            scalars[key] = value
+    lines = []
+    if prefix:
+        lines.append(f"[{prefix}]")
+    for key, value in scalars.items():
+        lines.append(f"{key} = {toml_value(value)}")
+    if scalars and (tables or arrays):
+        lines.append("")
+    for key, value in tables.items():
+        name = f"{prefix}.{key}" if prefix else key
+        lines.append(dump_table(value, name))
+        lines.append("")
+    for key, entries in arrays.items():
+        name = f"{prefix}.{key}" if prefix else key
+        for entry in entries:
+            lines.append(f"[[{name}]]")
+            for sub_key, sub_value in entry.items():
+                lines.append(f"{sub_key} = {toml_value(sub_value)}")
+            lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def toml_value(value) -> str:
+    """Render one TOML scalar or inline array."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    raise ConfigError(f"cannot serialize config value {value!r}")

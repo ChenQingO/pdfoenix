@@ -41,7 +41,7 @@
 
 ## 当前进度
 
-- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/experiment/calibrate` 全部可用。
+- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/expt/calibrate` 全部可用。
 - 抽样已加入绝对/相对下限：公式稀疏的书也会随机补齐到 `min_pages` / `min_rate`，不会几乎不抽。
 - `books/an_introduction` 已完成状态重建：1531 条公式、章节进度、悬空锚点白名单。
 - `pdfoenix check` 无错误；`pdfoenix build` 可生成 EPUB；`pdfoenix inspect` 通过。
@@ -187,7 +187,9 @@ pdfoenix -C books/my_book check
 | `pdfoenix inspect [--epub path]`                           | EPUB 结构验收                                          |
 | `pdfoenix watch`                                           | 只读实时看板                                           |
 | `pdfoenix report --by model\|chapter`                      | 成本汇总                                               |
-| `pdfoenix experiment --by model --metric cost,error_rate`  | 成本-质量对比                                          |
+| `pdfoenix expt [--batch N] [--combo ID ...] [-a]`          | 实验展示：batch × combo 总览或明细                    |
+| `pdfoenix expt ... --run [-m 备注] [--force]`              | 跑一轮实验（花钱）；批次自动递增                        |
+| `pdfoenix expt --report [-a]`                              | 成本-质量对比 + `expt/report.md`                       |
 | `pdfoenix calibrate`                                       | 公式/页风险分布报告                                    |
 
 每个命令可用 `pdfoenix <command> --help` 查看完整参数。
@@ -209,13 +211,20 @@ render_dpi = 150
 verify_dpi = 300
 verify_chunk_size = 5
 
-[models.transcribe]
-model = "mimo/mimo-v2.6-flash"
-thinking = "default"
+[expt]
+pages = "220-224,507-511"     # 全部组合共用的基准页
+active = 1                    # 驱动普通 transcribe/verify 的组合
 
-[models.verify]
-model = "mimo/mimo-v2.6-pro"   # 必须与 transcribe 不同
-thinking = "default"
+[[expt.provider]]
+name = "mimo"
+base_url = "https://api.xiaomimimo.com/v1"
+api_key_env = "MIMO_API_KEY"  # key 永不落盘，请 export
+
+# 默认组合：基准实验的质量冠军（默认配置已随附，无需手写）
+[[expt.combo]]
+id = 1                        # 组合不可变；要改就新建 id
+transcribe = "mimo/mimo-v2.6-pro-ultraspeed"
+verify = "mimo/mimo-v2.6-pro" # 必须与 transcribe 不同
 
 [sampling]
 page_risk = "max"
@@ -230,13 +239,22 @@ min_rate = 0.10          # 相对下限：至少抽候选页的 10%
 seed = 0
 ```
 
-### 两个 agent 的模型与思考强度
+### 组合：两个 agent 的模型对
 
-- `transcribe` 使用 `[models.transcribe]`
-- `verify` 使用 `[models.verify]`
+**组合（combo）** 是两个计费 agent 的模型对：`transcribe` 写 Markdown，`verify`（裁判）复核。
+组合写在 `config.toml` 且**不可变**——要改就新建 id，历史实验记录因此永远可解释。
+添加组合的唯一入口是 init：
 
-适配器会把 `model` + `thinking` 拼成 `provider/model#variant`，通过
-`opencode run --model ...` 传给对应 agent，所以两个 agent 天然可以使用不同模型。
+```bash
+pdfoenix init books/my_book --combo 2 4   # 已存在的直接选用，不存在的问询创建
+```
+
+不存在的 id 会进入交互问询（Tab/Enter 从 `presets/providers.toml` 目录选择；
+**永不询问 API key**——请 export 对应的 `api_key_env`）。组合写法为
+`provider/model#thinking`；`verify` 必须与 `transcribe` 不同（裁判不复核自己的产出）。
+适配器把组合拼成 `opencode run --model provider/model#variant` 传给对应 agent；
+连接信息（`base_url`、key 环境变量名）来自 `[[expt.provider]]`，运行时生成
+`working/opencode.jsonc`——该文件是生成物，用户无需编辑。
 
 `thinking = "default"`（或留空）表示不附加 variant；其他值会变成 `#<value>` 并作为显式 variant
 传给网关，包括 `thinking = "none"`（DeepSeek 网关把它作为真实 variant，如
@@ -245,6 +263,29 @@ seed = 0
 
 > 具体有哪些 variant 由模型和网关决定。当前 MiMo 网关只接受 `default`；
 > 设置 `high` / `low` / `medium` / `max` 会得到 `Variant unavailable`。
+
+### 组合参考价（美元 / 10 页）
+
+实测基准：数理统计扫描书，20 页 × 4 个难度窗（密集公式/中等/稀疏/散文），
+全量转写 + 全量复核、含重试损耗，折算为每 10 页口径：
+
+| 组合（transcribe × verify）                              | 纠错/100页 | 美元/10页 | 定位       |
+|----------------------------------------------------------|-----------:|----------:|------------|
+| **mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro**（默认组合） |   **55**   |   0.68    | 质量最佳   |
+| mimo-v2.6-pro × deepseek-flash#high                      |   50–65    |   0.13    | 性价比拐点 |
+| deepseek-flash#high × mimo-v2.6-pro                      |     85     |   0.12    | 成本优先   |
+| mimo-v2.6-flash × mimo-v2.6-pro                          |    190     |   0.11    | 不推荐     |
+| deepseek-flash#none × mimo-v2.6-pro                      |    250     |   0.13    | 不推荐     |
+
+- 默认组合 1（质量冠军）与 mimo provider 条目已随默认配置提供：`init` 后
+  `export MIMO_API_KEY` 即可直接开工；想省钱就用第 2 行的组合自行新建 id；
+- 思考档位显著影响质量：deepseek-flash `#none` → `#high`，纠错率 250 → 85，
+  成本仅 +$0.02/10页——思考值得开；
+- `deepseek-v4-pro` 不支持图片输入（会拒绝执行），任何思考档位都不可用；
+- 价格随公式密度浮动；上表为**全量复核**口径。生产环境按约 10% 风险抽样复核时，
+  全书成本 ≈ 转写 + 10% × 复核，可比上表再降 3–4 成。
+
+### 抽样
 
 风险分档来自实测标定：页风险 `≤50 / 51–125 / >125` 对应抽样概率 `1% / 9% / 60%`，
 期望约 10% 页，`budget` 仅作硬封顶。
@@ -258,11 +299,21 @@ seed = 0
 ```bash
 pdfoenix -C books/my_book report --by model     # 按模型看 token / 成本
 pdfoenix -C books/my_book report --by chapter   # 按章看 token / 成本
-pdfoenix -C books/my_book experiment --by model --metric cost,error_rate
+
+pdfoenix -C books/my_book expt                  # batch × combo 总览（只读）
+pdfoenix -C books/my_book expt --combo 2 4 --run -m "换网关后复测"   # 新批次
+pdfoenix -C books/my_book expt --batch 1 --run  # 续跑 batch 1 未完成的格子
+pdfoenix -C books/my_book expt --report         # 对比表 + expt/report.md
 pdfoenix -C books/my_book watch                 # 实时看板
 ```
 
-每次模型调用都会记入 `logs/pipeline.db`（模型、思考档、输入/视觉/输出 token、耗时、状态）。
+**没有 `--run` 就一律只读**。一个批次 = 一轮组合对照（`expt/batch_N/combo_M/`）；
+带 `--batch` + `--combo` 时 `--run` 替换该批次的组合集并补跑缺口。已完成的格子默认跳过
+（`--force` 才重做），账本只增不删。
+
+每次模型调用都会记入 `logs/pipeline.db`（生产）或 `expt/experiments.db`（实验）：
+模型、思考档、组合、批次、输入/视觉/输出 token、耗时、状态。实验质量由组合自己的
+`verify` 裁判判定：纠错/100 复核页，并列覆盖率与结构缺陷（错误页锚点、工具标记泄漏）。
 
 > `cost_usd` 由 `presets/pricing.toml` 的单价计算；未配置单价的模型显示 0，但 token 数始终真实。
 

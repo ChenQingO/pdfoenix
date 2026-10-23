@@ -15,17 +15,19 @@ from typing import Any
 
 import fitz
 
+from pdfoenix import expt as expt_mod
 from pdfoenix.assets.crop import crop_figures, render_verify_pages
 from pdfoenix.calibrate import calibration_report, format_report
 from pdfoenix.core.book import Book
 from pdfoenix.core.build import build_book
 from pdfoenix.core.check import check_book
 from pdfoenix.core.merge import merge_book, merge_chapter
+from pdfoenix.core.pages import batch_ranges, parse_pages
 from pdfoenix.core.render import render_pages
 from pdfoenix.core.scout import scout_book
 from pdfoenix.core.telemetry import Telemetry
 from pdfoenix.inspect import inspect_epub
-from pdfoenix.report import experiment_summary, summarize_costs
+from pdfoenix.report import summarize_costs
 from pdfoenix.scaffold import scaffold_book
 from pdfoenix.transcribe.opencode import OpenCodeTranscriber
 from pdfoenix.transcribe.protocol import Correction
@@ -62,6 +64,8 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--author")
     init.add_argument("--page-offset", type=int, default=0,
                       help="PDF page = printed page + offset")
+    init.add_argument("--combo", nargs="*", type=int, metavar="ID",
+                      help="adopt existing combos or create missing ones")
     init.add_argument("--force", action="store_true")
     init.set_defaults(func=cmd_init)
 
@@ -76,7 +80,6 @@ def _build_parser() -> argparse.ArgumentParser:
     transcribe = sub.add_parser("transcribe", help="transcribe page batches")
     transcribe.add_argument("--chapter", help="only this chapter, e.g. ch09")
     transcribe.add_argument("--pages", help="explicit page range, e.g. 19-30,40")
-    transcribe.add_argument("--experiment", help="experiment id for the cost ledger")
     transcribe.add_argument("--force", action="store_true", help="redo existing batches")
     transcribe.set_defaults(func=cmd_transcribe)
 
@@ -89,7 +92,6 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--chapter", help="only this chapter")
     verify.add_argument("--pages", help="explicit page range, bypassing sampling")
     verify.add_argument("--force", action="store_true")
-    verify.add_argument("--experiment", help="experiment id for the cost ledger")
     verify.add_argument("--no-audit", action="store_true")
     verify.add_argument("--apply-audit", action="store_true",
                         help="apply global-audit replacements (otherwise dry-run)")
@@ -121,10 +123,19 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--by", choices=("model", "chapter"), default="model")
     report.set_defaults(func=cmd_report)
 
-    experiment = sub.add_parser("experiment", help="cost-vs-quality experiment table")
-    experiment.add_argument("--by", choices=("model", "chapter"), default="model")
-    experiment.add_argument("--metric", default="cost,error_rate")
-    experiment.set_defaults(func=cmd_experiment)
+    expt = sub.add_parser(
+        "expt", help="model-combination experiments (display; --run to spend)")
+    expt.add_argument("--batch", type=int, help="select one batch (detail view)")
+    expt.add_argument("--combo", nargs="*", type=int, metavar="ID",
+                      help="select combos; with --run they form the batch")
+    expt.add_argument("-a", "--all", action="store_true",
+                      help="select every declared combo")
+    expt.add_argument("--report", action="store_true",
+                      help="print the comparison and write expt/report.md")
+    expt.add_argument("-m", "--message", default="", help="batch note")
+    expt.add_argument("--run", action="store_true", help="execute (spend)")
+    expt.add_argument("--force", action="store_true", help="re-run finished cells")
+    expt.set_defaults(func=cmd_expt)
 
     calibrate = sub.add_parser("calibrate", help="report risk distributions")
     calibrate.set_defaults(func=cmd_calibrate)
@@ -138,6 +149,9 @@ def cmd_init(args) -> int:
         root, pdf=args.pdf, title=args.title, author=args.author,
         page_offset=args.page_offset, force=args.force)
     print(f"initialized {book.root}")
+    for combo_id in args.combo or []:
+        expt_mod.ensure_combo(book, combo_id)
+        print(f"combo {combo_id}: ready (active)")
     return 0
 
 
@@ -152,7 +166,7 @@ def cmd_scout(args) -> int:
 def cmd_render(args) -> int:
     book = _book(args)
     total = _pdf_pages(book)
-    pages = _parse_pages(args.pages, total) if args.pages else list(range(1, total + 1))
+    pages = parse_pages(args.pages, total) if args.pages else list(range(1, total + 1))
     missing = [page for page in pages
                if args.force or not book.page_image(page).exists()]
     if missing:
@@ -169,11 +183,11 @@ def cmd_transcribe(args) -> int:
         ranges = {name: value for name, value in ranges.items() if name == args.chapter}
     if not ranges:
         raise ValueError(f"chapter not found: {args.chapter}")
-    wanted = set(_parse_pages(args.pages, _pdf_pages(book))) if args.pages else None
+    wanted = set(parse_pages(args.pages, _pdf_pages(book))) if args.pages else None
     if wanted is not None and not wanted:
         raise ValueError(f"no pages match: {args.pages}")
     size = book.config["pipeline"]["batch_pages"]
-    telemetry = Telemetry(book.root, experiment_id=args.experiment)
+    telemetry = _production_ledger(book)
     transcriber = _make_transcriber(book, telemetry)
     done = 0
     try:
@@ -181,7 +195,7 @@ def cmd_transcribe(args) -> int:
             directory = book.batches_dir / chapter
             directory.mkdir(parents=True, exist_ok=True)
             _write_task_file(book, chapter, start, end)
-            for first, last in _batch_ranges(start, end, size, wanted):
+            for first, last in batch_ranges(start, end, size, wanted):
                 target = directory / f"p{first}-{last}.md"
                 if target.exists() and not args.force:
                     continue
@@ -250,7 +264,7 @@ def cmd_verify(args) -> int:
     render_verify_pages(book, kept, force=args.force)
     images = [book.verify_dir / f"pdfpage_{page:03d}.png" for page in kept]
 
-    telemetry = Telemetry(book.root, experiment_id=args.experiment)
+    telemetry = _production_ledger(book)
     transcriber = _make_transcriber(book, telemetry)
     try:
         corrections = transcriber.verify(images, content)
@@ -319,17 +333,36 @@ def cmd_report(args) -> int:
     return 0
 
 
-def cmd_experiment(args) -> int:
+def cmd_expt(args) -> int:
     book = _book(args)
-    rows = experiment_summary(book, by=args.by)
-    aliases = {"cost": "cost_usd", "error_rate": "error_rate_per_100_pages"}
-    metrics = {aliases.get(metric.strip(), metric.strip())
-               for metric in args.metric.split(",") if metric.strip()}
-    columns = ("experiment_id", "key", "calls", "verify_pages", "corrections",
-               "error_rate_per_100_pages", "cost_usd")
-    selected = tuple(column for column in columns
-                     if column in {"experiment_id", "key"} or column in metrics)
-    _print_table(rows, selected)
+    expt_mod.ensure_workspace(book)
+    declared = expt_mod.combos(book)
+    if not declared:
+        print("no combos yet; add them with 'pdfoenix init --combo <id>'")
+        return 0
+    combo_ids = [str(value) for value in (args.combo or [])]
+    if args.all:
+        combo_ids = [str(value) for value in sorted(declared)]
+    if args.run:
+        return expt_mod.run_expt(book, batch_no=args.batch, combo_ids=combo_ids,
+                                 message=args.message, force=args.force)
+    if args.report:
+        _print_table(expt_mod.report_rows(book, include_hidden=args.all),
+                     expt_mod.CELL_COLUMNS)
+        print(f"report: {expt_mod.write_report(book)}")
+        return 0
+    if args.batch is not None and (combo_ids or args.all):
+        print(f"preview: batch_{args.batch} would use combos "
+              f"{' '.join(combo_ids)} (config unchanged; --run applies)")
+        _print_table(expt_mod.combo_rows(book, combo_ids), expt_mod.CELL_COLUMNS)
+        return 0
+    if args.batch is not None:
+        _print_table(expt_mod.cell_rows(book, args.batch), expt_mod.CELL_COLUMNS)
+        return 0
+    if combo_ids:
+        _print_table(expt_mod.combo_rows(book, combo_ids), expt_mod.CELL_COLUMNS)
+        return 0
+    _print_table(expt_mod.overview_rows(book), expt_mod.OVERVIEW_COLUMNS)
     return 0
 
 
@@ -344,56 +377,23 @@ def _book(args) -> Book:
     return Book(args.book)
 
 
+def _production_ledger(book: Book) -> Telemetry:
+    """Production ledger, tagged with the active combo for provenance."""
+    entry = expt_mod.active_combo(book)
+    return Telemetry(book.root, combo_id=entry["id"] if entry else None)
+
+
 def _make_transcriber(book: Book, telemetry: Telemetry):
     """Adapter factory kept separate so tests can inject a fake model."""
-    return OpenCodeTranscriber(book.root, book.config, telemetry=telemetry)
+    entry = expt_mod.active_combo(book)
+    config = expt_mod.pipeline_config(book, entry) if entry else book.config
+    return OpenCodeTranscriber(book.root, config, telemetry=telemetry,
+                               presets_dir=book.root / "presets")
 
 
 def _pdf_pages(book: Book) -> int:
     with fitz.open(book.pdf()) as doc:
         return doc.page_count
-
-
-def _parse_pages(spec: str, total: int) -> list[int]:
-    pages: set[int] = set()
-    for part in str(spec).split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            left, right = part.split("-", 1)
-            start = int(left) if left else 1
-            end = int(right) if right else total
-            pages.update(range(start, end + 1))
-        else:
-            pages.add(int(part))
-    return sorted(page for page in pages if 1 <= page <= total)
-
-
-def _batch_ranges(start: int, end: int, size: int,
-                  wanted: set[int] | None) -> list[tuple[int, int]]:
-    """Split a chapter into batch ranges, honouring an explicit page selection.
-
-    With ``wanted`` unset the chapter is chunked from its first page, exactly as
-    before; with a selection only the chosen pages are kept, gaps start a new
-    run so a batch never spans unselected pages.
-    """
-    pages = [page for page in range(start, end + 1)
-             if wanted is None or page in wanted]
-    batches: list[tuple[int, int]] = []
-    run: list[int] = []
-    for page in pages:
-        if run and page != run[-1] + 1:
-            batches.extend(_chunk_run(run, size))
-            run = []
-        run.append(page)
-    batches.extend(_chunk_run(run, size))
-    return batches
-
-
-def _chunk_run(run: list[int], size: int) -> list[tuple[int, int]]:
-    return [(chunk[0], chunk[-1])
-            for chunk in (run[i:i + size] for i in range(0, len(run), size))]
 
 
 def _chapter_ranges(book: Book) -> dict[str, tuple[int, int]]:
@@ -467,7 +467,7 @@ def _save_corrections(book: Book, telemetry: Telemetry,
 def _verify_pages(book: Book, args) -> list[int]:
     risks = compute_page_risks(book)
     if args.pages:
-        selected = _parse_pages(args.pages, _pdf_pages(book))
+        selected = parse_pages(args.pages, _pdf_pages(book))
     elif args.full:
         selected = sorted(risks)
     else:

@@ -6,7 +6,7 @@ from pdfoenix.core.telemetry import Telemetry, compute_cost
 
 @pytest.fixture
 def tel(tmp_path):
-    t = Telemetry(tmp_path, run_id="run1", experiment_id="exp1")
+    t = Telemetry(tmp_path, run_id="run1", combo_id=1, batch_no=2)
     yield t
     t.close()
 
@@ -28,7 +28,8 @@ def test_record_call_roundtrip(tel):
     r = rows[0]
     assert r["call_id"] == cid
     assert r["run_id"] == "run1"
-    assert r["experiment_id"] == "exp1"
+    assert r["combo_id"] == "1"
+    assert r["batch_no"] == 2
     assert r["input_vision_tokens"] == 9000
     assert r["status"] == "ok"
     assert r["ts"]

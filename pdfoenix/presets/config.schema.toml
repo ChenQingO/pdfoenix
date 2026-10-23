@@ -29,6 +29,25 @@ thinking = "high"
 model = ""
 thinking = "low"
 
+# Model combinations: the pair behind the two billed agents.  Combo 1 is the
+# benchmark's quality winner and ships by default; add more via
+# `pdfoenix init --combo <id>`.  Keys are never stored: export api_key_env.
+[expt]
+pages = ""
+max_workers = 2
+attempts = 4
+active = 1
+
+[[expt.provider]]
+name = "mimo"
+base_url = "https://api.xiaomimimo.com/v1"
+api_key_env = "MIMO_API_KEY"
+
+[[expt.combo]]
+id = 1
+transcribe = "mimo/mimo-v2.6-pro-ultraspeed"
+verify = "mimo/mimo-v2.6-pro"
+
 [sampling]
 strategy = "risk_distribution"
 page_risk = "max"

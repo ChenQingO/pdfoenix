@@ -45,7 +45,7 @@ It does not aim for a pixel-perfect copy. It aims for:
 
 ## Current status
 
-- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/experiment/calibrate` are all available.
+- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/expt/calibrate` are all available.
 - Sampling now has absolute and relative floors: formula-sparse books are filled randomly to `min_pages` / `min_rate` instead of being almost skipped.
 - `books/an_introduction` has been reindexed: 1531 formulas, chapter progress, and a dangling-anchor whitelist.
 - `pdfoenix check` is clean; `pdfoenix build` produces an EPUB; `pdfoenix inspect` passes.
@@ -197,7 +197,9 @@ With `-C`, you can run commands from anywhere in the repository, or from a scrip
 | `pdfoenix inspect [--epub path]`                           | Structural EPUB checks                                                  |
 | `pdfoenix watch`                                           | Read-only live dashboard                                                |
 | `pdfoenix report --by model\|chapter`                      | Cost summary                                                            |
-| `pdfoenix experiment --by model --metric cost,error_rate`  | Cost-vs-quality comparison                                              |
+| `pdfoenix expt [--batch N] [--combo ID ...] [-a]`          | Experiment display: batch × combo overview or detail                    |
+| `pdfoenix expt ... --run [-m msg] [--force]`               | Run one experiment round (spend); batches auto-increment                |
+| `pdfoenix expt --report [-a]`                              | Cost-vs-quality comparison + `expt/report.md`                           |
 | `pdfoenix calibrate`                                       | Formula/page risk distribution report                                   |
 
 Run `pdfoenix <command> --help` for all options of a command.
@@ -220,13 +222,20 @@ render_dpi = 150
 verify_dpi = 300
 verify_chunk_size = 5
 
-[models.transcribe]
-model = "mimo/mimo-v2.6-flash"
-thinking = "default"
+[expt]
+pages = "220-224,507-511"     # benchmark pages shared by every combo
+active = 1                    # combo driving plain transcribe/verify
 
-[models.verify]
-model = "mimo/mimo-v2.6-pro"   # must differ from transcribe
-thinking = "default"
+[[expt.provider]]
+name = "mimo"
+base_url = "https://api.xiaomimimo.com/v1"
+api_key_env = "MIMO_API_KEY"  # keys are never stored; export them
+
+# default combo: quality winner of our benchmark (shipped with the defaults)
+[[expt.combo]]
+id = 1                        # combos are immutable; create a new id to change
+transcribe = "mimo/mimo-v2.6-pro-ultraspeed"
+verify = "mimo/mimo-v2.6-pro" # must differ from transcribe
 
 [sampling]
 page_risk = "max"
@@ -241,13 +250,24 @@ min_rate = 0.10          # at least 10% of candidate pages
 seed = 0
 ```
 
-### Models and thinking levels for the two agents
+### Combos: the models behind the two agents
 
-- `transcribe` uses `[models.transcribe]`
-- `verify` uses `[models.verify]`
+A **combo** is the model pair behind the two billed agents: `transcribe` writes the
+Markdown, `verify` (the judge) audits it.  Combos live in `config.toml` and are
+**immutable** — to change a pair, create a new combo id, so historical experiment
+records stay interpretable.  Adding combos is done only through init:
 
-The adapter builds `provider/model#variant` from `model` + `thinking` and passes it to the
-corresponding agent as `opencode run --model ...`, so the two agents can use different models.
+```bash
+pdfoenix init books/my_book --combo 2 4   # adopt existing ids, create missing ones
+```
+
+Missing ids open an interactive wizard (Tab/Enter picks from `presets/providers.toml`;
+**API keys are never asked** — export the provider's `api_key_env` instead).  A combo
+spec is `provider/model#thinking`; `verify` must differ from `transcribe` (a judge
+never reviews its own output).  The adapter passes the spec to the corresponding
+agent as `opencode run --model provider/model#variant`; connection details
+(`base_url`, key env var) come from `[[expt.provider]]` and are materialized into a
+generated `working/opencode.jsonc` — users never edit that file.
 
 `thinking = "default"` (or empty) means no variant suffix. Any other value becomes `#<value>`
 and is passed to the gateway as an explicit variant, including `thinking = "none"` for gateways
@@ -256,6 +276,26 @@ For example, `thinking = "high"` produces `mimo/mimo-v2.6-pro#high`.
 
 > The available variants depend on the model and gateway. The current MiMo gateway only accepts
 > `default`; `high` / `low` / `medium` / `max` return `Variant unavailable`.
+
+### Combo reference prices (USD per 10 pages)
+
+Measured on a math-heavy scanned book: 20 pages across four difficulty windows,
+full transcription + full review including retry waste, scaled to 10 pages:
+
+| combo (transcribe × verify)                              | err/100p | $/10pp | role         |
+|----------------------------------------------------------|---------:|-------:|--------------|
+| **mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro** (default)   |  **55**  |  0.68  | best quality |
+| mimo-v2.6-pro × deepseek-flash#high                      |   50–65  |  0.13  | cost/quality |
+| deepseek-flash#high × mimo-v2.6-pro                      |    85    |  0.12  | cheapest ok  |
+| mimo-v2.6-flash × mimo-v2.6-pro                          |   190    |  0.11  | avoid        |
+| deepseek-flash#none × mimo-v2.6-pro                      |   250    |  0.13  | avoid        |
+
+Combo 1 (the quality winner) ships with the default configuration: `init`, then
+`export MIMO_API_KEY`, and you are ready.  Thinking matters: deepseek-flash
+`#none` → `#high` moves 250 → 85 err/100p for +$0.02/10pp.  `deepseek-v4-pro`
+has no image input and refuses these tasks at every thinking level.  Prices
+scale with formula density; with ~10% sampled review in production the book
+cost is roughly transcription + 10% × review, 30–40% below the table.
 
 The risk bands come from calibration: page risk `≤50 / 51–125 / >125` maps to sampling
 probabilities `1% / 9% / 60%`, about 10% of pages on average. `budget` is only a hard ceiling.
@@ -270,12 +310,24 @@ is sampled. This prevents formula-sparse books from being almost entirely skippe
 ```bash
 pdfoenix -C books/my_book report --by model     # tokens / cost by model
 pdfoenix -C books/my_book report --by chapter   # tokens / cost by chapter
-pdfoenix -C books/my_book experiment --by model --metric cost,error_rate
+
+pdfoenix -C books/my_book expt                  # batch × combo overview (display)
+pdfoenix -C books/my_book expt --combo 2 4 --run -m "after prompt v2"   # new batch
+pdfoenix -C books/my_book expt --batch 1 --run  # resume batch 1's unfinished cells
+pdfoenix -C books/my_book expt --report         # comparison + expt/report.md
 pdfoenix -C books/my_book watch                 # live dashboard
 ```
 
-Every model call is recorded in `logs/pipeline.db`: model, thinking level, input/vision/output
-tokens, latency, and status.
+Nothing spends without `--run`; every other `expt` invocation is display.  A batch is one
+comparison round over a set of combos (`expt/batch_N/combo_M/`); with `--batch` and `--combo`,
+`--run` replaces the batch's combo set and fills its gaps.  Finished cells are skipped unless
+`--force`, and the ledger only ever grows.
+
+Every model call is recorded in `logs/pipeline.db` (production) or `expt/experiments.db`
+(experiments): model, thinking level, combo, batch, input/vision/output tokens, latency,
+and status.  Experiment quality is judged by the combo's own `verify` model: corrections
+per 100 verified pages, reported next to coverage and structural defects (bad page
+anchors, leaked tool-call markup).
 
 > `cost_usd` is computed from the prices in `presets/pricing.toml`. A model without a configured
 > price shows 0, but token counts are always recorded.

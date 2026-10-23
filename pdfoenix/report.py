@@ -1,12 +1,9 @@
-"""Cost and cost-vs-quality reports over the SQLite ledger.
+"""Cost reports over the SQLite ledger.
 
 The ledger stores tokens, never money, so every report takes a pricing table
-(USD per 1M tokens) and computes cost at read time.  Two views are supported:
-
-* :func:`summarize_costs` groups calls by model or chapter (token and cost
-  totals).
-* :func:`experiment_summary` groups by experiment and model, joins corrections
-  through ``verify_call_id``, and reports corrections per 100 verified pages.
+(USD per 1M tokens) and computes cost at read time.  :func:`summarize_costs`
+groups calls by model or chapter (token and cost totals); experiment
+comparisons live in ``pdfoenix.expt`` on the dedicated ``experiments.db``.
 
 These functions are pure read-side helpers; the CLI decides how to render them.
 """
@@ -70,54 +67,6 @@ def summarize_costs(book: Book, *, by: str = "model", pricing=None) -> list[dict
         row = rows.setdefault(key, _empty_row(key))
         _add_call(row, call, pricing)
     return sorted(rows.values(), key=lambda row: row["key"])
-
-
-def experiment_summary(book: Book, *, by: str = "model", pricing=None) -> list[dict]:
-    """Compare experiments: cost, verified pages and corrections per 100 pages."""
-    if by not in {"model", "chapter"}:
-        raise ReportError("by must be 'model' or 'chapter'")
-    pricing = pricing if pricing is not None else load_pricing(book_root=book.root)
-    scout = book.state.load("scout") if by == "chapter" else None
-
-    telemetry = Telemetry(book.root)
-    try:
-        calls = telemetry.fetch_calls()
-        corrections = telemetry.fetch_corrections()
-    finally:
-        telemetry.close()
-
-    rows: dict[tuple[str, str], dict] = {}
-    call_group: dict[str, tuple[str, str]] = {}
-    for call in calls:
-        experiment = call["experiment_id"] or "default"
-        detail = call["model"] if by == "model" else chapter_for_unit(call["unit_id"], scout)
-        key = (experiment, detail or "unknown")
-        call_group[call["call_id"]] = key
-        row = rows.setdefault(key, {
-            "experiment_id": experiment,
-            "key": key[1],
-            "calls": 0,
-            "verify_pages": 0,
-            "input_text_tokens": 0,
-            "input_vision_tokens": 0,
-            "output_tokens": 0,
-            "cost_usd": 0.0,
-            "corrections": 0,
-        })
-        _add_call(row, call, pricing)
-        if call["stage"] == "verify":
-            row["verify_pages"] += int(call["n_images"] or 0)
-
-    for correction in corrections:
-        key = call_group.get(correction["verify_call_id"])
-        if key is not None:
-            rows[key]["corrections"] += 1
-
-    for row in rows.values():
-        pages = row["verify_pages"]
-        row["error_rate_per_100_pages"] = (
-            100 * row["corrections"] / pages if pages else 0.0)
-    return sorted(rows.values(), key=lambda row: (row["experiment_id"], row["key"]))
 
 
 def chapter_for_unit(unit_id: str, scout: dict | None) -> str:

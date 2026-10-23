@@ -1,11 +1,10 @@
-"""Cost/experiment report tests (TDD)."""
+"""Cost report tests (TDD)."""
 import pytest
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.telemetry import Telemetry
 from pdfoenix.report import (
     chapter_for_unit,
-    experiment_summary,
     load_pricing,
     summarize_costs,
 )
@@ -81,28 +80,6 @@ def test_summarize_costs_by_chapter(tmp_path):
     rows = summarize_costs(book, by="chapter", pricing={})
     assert [row["key"] for row in rows] == ["ch01", "ch02"]
     assert [row["input_text_tokens"] for row in rows] == [1000, 2000]
-
-
-def test_experiment_summary_joins_corrections(tmp_path):
-    book = make_book(tmp_path)
-    tel = Telemetry(tmp_path, experiment_id="exp-a")
-    call_id = tel.record_call(
-        stage="verify", role="verify", model="m1", n_images=5,
-        input_text_tokens=1000, output_tokens=100)
-    tel.record_correction(
-        verify_call_id=call_id, unit_id="p50-55", severity="introduced",
-        pattern="sed→seb", source="ocr")
-    tel.close()
-
-    rows = experiment_summary(book, by="model", pricing={
-        "m1": {"input_text": 1.0, "input_vision": 0.0, "output": 1.0}})
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["experiment_id"] == "exp-a"
-    assert row["corrections"] == 1
-    assert row["verify_pages"] == 5
-    assert row["error_rate_per_100_pages"] == pytest.approx(20.0)
-    assert row["cost_usd"] == pytest.approx(0.0011)
 
 
 def test_missing_pricing_yields_zero_cost(tmp_path):

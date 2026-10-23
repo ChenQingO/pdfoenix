@@ -3,8 +3,9 @@ import zipfile
 
 import fitz
 
-from pdfoenix.cli import _batch_ranges, main
+from pdfoenix.cli import main
 from pdfoenix.core.book import Book
+from pdfoenix.core.pages import batch_ranges
 from pdfoenix.core.telemetry import Telemetry
 from pdfoenix.transcribe.protocol import Correction
 
@@ -162,14 +163,14 @@ class RecordingTranscriber(FakeTranscriber):
 
 
 def test_batch_ranges_honours_page_selection():
-    assert _batch_ranges(1, 10, 5, None) == [(1, 5), (6, 10)]
-    assert _batch_ranges(1, 3, 5, {2, 3}) == [(2, 3)]
+    assert batch_ranges(1, 10, 5, None) == [(1, 5), (6, 10)]
+    assert batch_ranges(1, 3, 5, {2, 3}) == [(2, 3)]
     # A gap splits runs so no batch ever spans unselected pages.
-    assert _batch_ranges(1, 12, 2, {2, 3, 7, 8, 9}) == [(2, 3), (7, 8), (9, 9)]
-    assert _batch_ranges(1, 10, 5, set()) == []
+    assert batch_ranges(1, 12, 2, {2, 3, 7, 8, 9}) == [(2, 3), (7, 8), (9, 9)]
+    assert batch_ranges(1, 10, 5, set()) == []
 
 
-def test_cli_transcribe_pages_and_experiment_id(tmp_path, monkeypatch):
+def test_cli_transcribe_pages_selection(tmp_path, monkeypatch):
     root = init_book(tmp_path)
     assert main(["-C", str(root), "scout"]) == 0
 
@@ -178,21 +179,13 @@ def test_cli_transcribe_pages_and_experiment_id(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pdfoenix.cli._make_transcriber", factory)
 
-    assert main(["-C", str(root), "transcribe",
-                 "--pages", "2-3", "--experiment", "exp-a"]) == 0
+    assert main(["-C", str(root), "transcribe", "--pages", "2-3"]) == 0
     batches = root / "working" / "batches" / "ch01"
     assert (batches / "p2-3.md").exists()
     assert not (batches / "p1-3.md").exists()
 
-    telemetry = Telemetry(root)
-    try:
-        calls = telemetry.fetch_calls()
-    finally:
-        telemetry.close()
-    assert calls and {call["experiment_id"] for call in calls} == {"exp-a"}
 
-
-def test_cli_verify_experiment_id(tmp_path, monkeypatch):
+def test_cli_verify_pages(tmp_path, monkeypatch):
     root = init_book(tmp_path)
     assert main(["-C", str(root), "scout"]) == 0
 
@@ -201,9 +194,8 @@ def test_cli_verify_experiment_id(tmp_path, monkeypatch):
 
     monkeypatch.setattr("pdfoenix.cli._make_transcriber", factory)
 
-    assert main(["-C", str(root), "transcribe", "--experiment", "exp-t"]) == 0
-    assert main(["-C", str(root), "verify", "--pages", "1",
-                 "--experiment", "exp-b"]) == 0
+    assert main(["-C", str(root), "transcribe"]) == 0
+    assert main(["-C", str(root), "verify", "--pages", "1"]) == 0
 
     telemetry = Telemetry(root)
     try:
@@ -212,4 +204,3 @@ def test_cli_verify_experiment_id(tmp_path, monkeypatch):
     finally:
         telemetry.close()
     assert verify_calls
-    assert {call["experiment_id"] for call in verify_calls} == {"exp-b"}
