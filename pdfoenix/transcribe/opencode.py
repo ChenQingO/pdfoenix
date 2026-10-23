@@ -48,9 +48,12 @@ _OUTER_FENCE_RE = re.compile(
     r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 _DIGITS_RE = re.compile(r"\d+")
 # A model that ignores the tool-free contract sometimes answers with tool-call
-# markup instead of text.  That is a failed call, never a transcription.
+# markup instead of text (prose first, markup later, or the provider's own
+# tool-call syntax such as DeepSeek's DSML).  That is a failed call, never a
+# transcription, so the opening markers are matched anywhere in the answer.
 _TOOL_MARKUP_RE = re.compile(
-    r"^\s*(?:```[a-z]*\s*)?<(?:function=|function_call|tool_call|invoke)",
+    r"<function=|<invoke|<tool_call|<function_call|<tool_calls|<function_calls|"
+    r"｜｜DSML｜｜",  # noqa: RUF001 - DeepSeek's marker really uses fullwidth pipes
     re.IGNORECASE)
 
 
@@ -437,7 +440,7 @@ class OpenCodeTranscriber:
                 text=text, session_id=session_id, returncode=result.returncode,
                 stderr=stderr, latency_ms=latency_ms,
                 error=f"exit code {result.returncode}: {stderr.strip()}")
-        if text and _TOOL_MARKUP_RE.match(text):
+        if text and _TOOL_MARKUP_RE.search(text):
             return _CallOutcome(
                 text=text, session_id=session_id, returncode=result.returncode,
                 stderr=stderr, latency_ms=latency_ms,

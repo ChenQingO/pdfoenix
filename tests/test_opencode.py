@@ -220,6 +220,20 @@ def test_tool_call_markup_is_recorded_as_failure(tmp_path, telemetry):
     assert telemetry.fetch_calls()[0]["status"] == "failed"
 
 
+def test_tool_markup_after_prose_is_also_rejected(tmp_path, telemetry):
+    # Real leaks seen in benchmark runs: prose first, markup later, and the
+    # provider's own tool syntax (DeepSeek DSML).
+    cases = ["I'll first check the directory.\n\n<function=bash>ls</function>",
+             "<｜｜DSML｜｜ calls> more markup"]  # noqa: RUF001
+    for text in cases:
+        model = build(tmp_path, FakeRunner([text]), telemetry)
+        with pytest.raises(OpenCodeError, match="tool-call markup"):
+            model.transcribe(make_images(tmp_path, [1]), "x")
+    rows = telemetry.fetch_calls()
+    assert len(rows) == 2
+    assert all(row["status"] == "failed" for row in rows)
+
+
 def test_verify_parses_corrections_and_splits_aligned_chunks(tmp_path, telemetry):
     content = (
         "<!-- page:399 -->\nPage 399 text.\n"
