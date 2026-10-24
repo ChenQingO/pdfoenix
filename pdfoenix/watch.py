@@ -12,8 +12,8 @@ import time
 from typing import TYPE_CHECKING
 
 from pdfoenix.core.book import Book
-from pdfoenix.core.telemetry import compute_cost
-from pdfoenix.report import load_pricing
+from pdfoenix.core.telemetry import Telemetry
+from pdfoenix.report import ledger_totals
 
 if TYPE_CHECKING:
     from rich.table import Table
@@ -24,7 +24,10 @@ def dashboard_data(book: Book) -> dict:
     progress = book.state.load("progress")
     scout = book.state.load("scout")
     chapters = _chapter_rows(book, progress, scout)
-    totals = _ledger_totals(book)
+    try:
+        totals = ledger_totals(book)
+    except sqlite3.Error:
+        totals = {"calls": 0, "tokens": 0, "cost": 0.0}
     totals["agents"] = _active_agents(book)
     return {"title": book.config["book"].get("title") or book.root.name,
             "chapters": chapters, "totals": totals}
@@ -88,64 +91,20 @@ def _chapter_rows(book: Book, progress: dict, scout: dict) -> list[dict]:
     if not names:
         names = [f"ch{int(chapter['number']):02d}"
                  for chapter in scout.get("chapters", [])]
-    page_ranges = _chapter_pages(book, scout)
+    spans = book.chapter_ranges()
     rows = []
     for name in names:
         merged = chapters.get(name, {})
         status = "merged" if merged.get("merged") else "pending"
+        span = spans.get(name)
         rows.append({
             "name": name,
             "status": status,
             "formulas": int(merged.get("formulas", 0)),
             "figures": int(merged.get("figures", 0)),
-            "pages": page_ranges.get(name, 0),
+            "pages": (span[1] - span[0] + 1) if span else 0,
         })
     return rows
-
-
-def _chapter_pages(book: Book, scout: dict) -> dict[str, int]:
-    chapters = sorted(scout.get("chapters", []), key=lambda item: item["pdf_page"])
-    if not chapters:
-        return {}
-    try:
-        import fitz
-
-        with fitz.open(book.pdf()) as doc:
-            last_page = doc.page_count
-    except Exception:
-        last_page = int(chapters[-1]["pdf_page"])
-    ranges = {}
-    for index, chapter in enumerate(chapters):
-        start = int(chapter["pdf_page"])
-        end = (int(chapters[index + 1]["pdf_page"]) - 1
-               if index + 1 < len(chapters) else last_page)
-        name = f"ch{int(chapter['number']):02d}"
-        ranges[name] = max(0, end - start + 1)
-    return ranges
-
-
-def _ledger_totals(book: Book) -> dict:
-    totals = {"calls": 0, "tokens": 0, "cost": 0.0}
-    path = book.logs_dir / "pipeline.db"
-    if not path.exists():
-        return totals
-    pricing = load_pricing(book_root=book.root)
-    try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        connection.row_factory = sqlite3.Row
-        rows = connection.execute("SELECT * FROM llm_calls").fetchall()
-        connection.close()
-    except sqlite3.Error:
-        return totals
-    for row in rows:
-        totals["calls"] += 1
-        text = int(row["input_text_tokens"] or 0)
-        vision = int(row["input_vision_tokens"] or 0)
-        output = int(row["output_tokens"] or 0)
-        totals["tokens"] += text + vision + output
-        price = pricing.get(row["model"] or "", {})
-        totals["cost"] += compute_cost(text, vision, output, price)
-    return totals
 
 
 def _active_agents(book: Book) -> int:
@@ -153,22 +112,23 @@ def _active_agents(book: Book) -> int:
     if not path.exists():
         return 0
     try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-        rows = connection.execute(
-            "SELECT type, payload FROM events ORDER BY id").fetchall()
-        connection.close()
+        telemetry = Telemetry(book.root)
+        try:
+            events = telemetry.fetch_events()
+        finally:
+            telemetry.close()
     except sqlite3.Error:
         return 0
     active = set()
-    for event_type, payload in rows:
+    for event in events:
         try:
-            data = json.loads(payload or "{}")
+            data = json.loads(event["payload"] or "{}")
         except json.JSONDecodeError:
             continue
         agent = data.get("agent") or data.get("unit") or "agent"
-        if event_type == "agent_start":
+        if event["type"] == "agent_start":
             active.add(agent)
-        elif event_type in {"agent_done", "agent_fail"}:
+        elif event["type"] in {"agent_done", "agent_fail"}:
             active.discard(agent)
     return len(active)
 

@@ -27,13 +27,10 @@ def make_book(tmp_path):
 
 
 def test_chapter_for_unit():
-    scout = {"chapters": [
-        {"number": "1", "pdf_page": 1},
-        {"number": "2", "pdf_page": 100},
-    ]}
-    assert chapter_for_unit("p50-55", scout) == "ch01"
-    assert chapter_for_unit("p100-104", scout) == "ch02"
-    assert chapter_for_unit("weird", scout) == "unknown"
+    ranges = {"ch01": (1, 99), "ch02": (100, 512)}
+    assert chapter_for_unit("p50-55", ranges) == "ch01"
+    assert chapter_for_unit("p100-104", ranges) == "ch02"
+    assert chapter_for_unit("weird", ranges) == "unknown"
 
 
 def test_load_pricing(tmp_path):
@@ -89,3 +86,58 @@ def test_missing_pricing_yields_zero_cost(tmp_path):
                     input_text_tokens=1_000_000)
     tel.close()
     assert summarize_costs(book, pricing={})[0]["cost_usd"] == 0.0
+
+
+# ── Risk calibration report ─────────────────────────────────────────────
+def make_risk_book(tmp_path):
+    book = make_book(tmp_path)
+    chapter = book.manuscript_dir / "ch01"
+    chapter.mkdir(parents=True)
+    (chapter / "sec1-1.md").write_text(
+        "## 1.1 Intro {#sec-1-1}\n\n$$\nx^2 \\qquad (1)\n$$\n\n"
+        "$$\n\\frac{a}{b} \\qquad (2)\n$$\n",
+        encoding="utf-8")
+    book.pages_dir.mkdir(parents=True)
+    for page in (1, 2, 3):
+        (book.pages_dir / f"pdfpage_{page:03d}.png").write_bytes(b"png")
+    book.state.save("formulas", {
+        "formula_to_page": {},
+        "page_to_formulas": {
+            "working/pages/pdfpage_001.png": ["eq1"],
+            "working/pages/pdfpage_002.png": ["eq2"],
+        },
+        "formulas": {"eq1": {"risk": 2}, "eq2": {"risk": 3}},
+    })
+    return book
+
+
+def test_formula_and_page_risk_scores(tmp_path):
+    from pdfoenix.report import formula_scores, risk_report
+
+    book = make_risk_book(tmp_path)
+    # x^2 has one subscript/superscript (2); a/b has one \frac (3).
+    assert formula_scores(book) == [2, 3]
+    report = risk_report(book)
+    assert report["formulas"]["n"] == 2
+    assert report["formulas"]["max"] == 3
+    assert report["pages"]["n"] == 3
+    assert report["bands"] == {"low": 3, "medium": 0, "high": 0}
+
+
+def test_formula_scores_use_configured_weights(tmp_path):
+    from pdfoenix.report import formula_scores
+
+    book = make_risk_book(tmp_path)
+    config = book.config
+    config["sampling"]["risk_weights"] = {"frac": 10}
+    weighted = Book(book.root, config=config)
+    assert formula_scores(weighted) == [2, 10]
+
+
+def test_format_risk_report_mentions_bands(tmp_path):
+    from pdfoenix.report import format_risk_report, risk_report
+
+    text = format_risk_report(risk_report(make_risk_book(tmp_path)))
+    assert "formula risk" in text
+    assert "page risk" in text
+    assert "low <= 50" in text

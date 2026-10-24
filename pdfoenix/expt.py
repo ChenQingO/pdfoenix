@@ -1,44 +1,32 @@
-"""Model-combination experiments (``pdfoenix expt``).
+"""Model-combination experiments: batches, cells, metrics and comparisons.
 
-Design
-------
-A *combo* is the model pair behind the two billed agents (transcribe + verify).
-Combos are added only through ``pdfoenix init --combo`` and are immutable: to
-change a pair, create a new combo id.  A *batch* is one comparison round over a
-set of combos, materialized as ``expt/batch_N/``.
+One *batch* is a comparison round over the fixed benchmark pages
+(``[expt].pages``); one *cell* is one combo run inside a batch
+(``expt/batch_N/combo_M/``).  Every model call is booked to the experiment
+ledger (``expt/experiments.db``), and quality is judged by each combo's own
+``verify`` agent: corrections per 100 reviewed pages, plus coverage and
+structural defects (wrong page anchors, tool-markup leaks).
 
-Every command is read-only display unless ``--run`` is given.  With ``--run``
-and no ``--batch`` a new batch is created from the selected combos; with
-``--batch`` the batch's combo set is replaced by ``--combo`` (if given) and its
-unfinished cells run.  Finished cells are skipped unless ``force``.
-
-Artifacts live under ``expt/batch_N/combo_M/`` (transcripts, run log, per-cell
-progress) and all cost accounting lands in ``expt/experiments.db``: batches,
-batch membership, per-(batch, combo) metrics and the shared call ledger
-(``llm_calls`` rows carry ``combo_id``/``batch_no``).
+Display is read-only; only ``pdfoenix expt run`` spends money.  Model wiring
+lives in :mod:`pdfoenix.combo`; unit operations shared with the production
+pipeline live in :mod:`pdfoenix.pipeline`.
 """
-import copy
 import json
-import re
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pdfoenix.assets.crop import render_verify_pages
+from pdfoenix import combo as combo_mod
+from pdfoenix import pipeline
 from pdfoenix.core.book import Book
-from pdfoenix.core.config import ConfigError, parse_model_spec, write_config
+from pdfoenix.core.config import ConfigError
 from pdfoenix.core.pages import batch_ranges, parse_pages
-from pdfoenix.core.telemetry import Telemetry, compute_cost
-from pdfoenix.report import load_pricing
-from pdfoenix.verify.content import content_for_pages
-
-_MARKUP_RE = re.compile(
-    r"<function=|<invoke|<tool_call|<function_call|<tool_calls|<function_calls|"
-    r"｜｜DSML｜｜",  # noqa: RUF001 - DeepSeek's marker really uses fullwidth pipes
-    re.IGNORECASE)
-_ANCHOR_RE = re.compile(r"<!--\s*page\s*:\s*(\d+)\s*-->")
-_BATCH_STEM_RE = re.compile(r"^p(\d+)(?:-(\d+))?$")
+from pdfoenix.core.telemetry import Telemetry
+from pdfoenix.report import call_cost, load_pricing
+from pdfoenix.transcribe.protocol import TOOL_MARKUP_RE
+from pdfoenix.verify.content import anchor_labels, content_for_pages
 
 _EXPT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -95,30 +83,10 @@ def _connect(book: Book) -> sqlite3.Connection:
     return connection
 
 
-# ── Config accessors ────────────────────────────────────────────────────
+# ── Benchmark plan ──────────────────────────────────────────────────────
 def expt_settings(book: Book) -> dict:
-    return book.config.get("expt", {})
-
-
-def combos(book: Book) -> dict[int, dict]:
-    """Return ``{combo_id: entry}`` in declaration order."""
-    return {int(entry["id"]): entry
-            for entry in expt_settings(book).get("combo", [])}
-
-
-def providers(book: Book) -> dict[str, dict]:
-    return {str(entry["name"]): entry
-            for entry in expt_settings(book).get("provider", [])}
-
-
-def combo_pair(entry: dict) -> dict:
-    """Resolve one combo into both agent specs."""
-    pair = {}
-    for role in ("transcribe", "verify"):
-        provider, model, thinking = parse_model_spec(entry.get(role, ""))
-        pair[role] = {"spec": f"{provider}/{model}", "model": model,
-                      "thinking": thinking or "default"}
-    return pair
+    """The ``[expt]`` table (shared accessor with :mod:`pdfoenix.combo`)."""
+    return combo_mod.settings(book)
 
 
 def benchmark_pages(book: Book) -> list[int]:
@@ -128,34 +96,21 @@ def benchmark_pages(book: Book) -> list[int]:
         raise ConfigError(
             "expt.pages is empty; declare benchmark pages in config.toml "
             "([expt] pages = \"220-224,...\") so combos stay comparable")
-    pages = parse_pages(spec, _total_pages(book))
+    pages = parse_pages(spec, book.pdf_page_count())
     if not pages:
         raise ConfigError(f"expt.pages matches no page: {spec!r}")
     return pages
 
 
-def _total_pages(book: Book) -> int:
-    import fitz
-
-    with fitz.open(book.pdf()) as doc:
-        return doc.page_count
-
-
 def window_plan(book: Book) -> list[tuple[int, int]]:
-    """Contiguous ``(first, last)`` windows over the benchmark pages."""
+    """Contiguous ``(first, last)`` windows over the benchmark pages.
+
+    Gaps in the page selection start a new window, so a batch never spans
+    unselected pages (same rule as production transcription).
+    """
     size = int(book.config["pipeline"]["batch_pages"])
     pages = benchmark_pages(book)
-    runs: list[list[int]] = []
-    for page in pages:
-        if runs and page != runs[-1][-1] + 1:
-            runs.append([])
-        if not runs:
-            runs.append([])
-        runs[-1].append(page)
-    windows = []
-    for run in runs:
-        windows.extend(batch_ranges(run[0], run[-1], size, set(run)))
-    return windows
+    return batch_ranges(pages[0], pages[-1], size, set(pages))
 
 
 # ── Batch bookkeeping ───────────────────────────────────────────────────
@@ -219,81 +174,18 @@ def finish_batch(book: Book, batch_no: int, status: str) -> None:
             (status, _now(), batch_no))
 
 
-# ── Model wiring ────────────────────────────────────────────────────────
-def generate_opencode_config(book: Book) -> Path:
-    """Materialize the adapter's OpenCode config from ``[[expt.provider]]``.
-
-    The book's ``config.toml`` is the single source of truth; the generated
-    file (``working/opencode.jsonc``) is an artifact users never edit.
-    """
-    template = Path(__file__).resolve().parent / "presets" / "opencode.jsonc"
-    text = "\n".join(line for line in template.read_text(encoding="utf-8").splitlines()
-                     if not line.strip().startswith("//"))
-    data = json.loads(text)
-
-    referenced: dict[str, set[str]] = {}
-    for entry in combos(book).values():
-        for role in ("transcribe", "verify"):
-            provider, model, _ = parse_model_spec(entry.get(role, ""))
-            referenced.setdefault(provider, set()).add(model)
-
-    generated = {}
-    for name, entry in providers(book).items():
-        if name not in referenced:
-            continue
-        generated[name] = {
-            "name": name,
-            # Every [[expt.provider]] is an OpenAI-compatible HTTP endpoint;
-            # the package picks opencode's matching driver for unknown names.
-            "package": "@opencode/ai/providers/openai-compatible",
-            "settings": {"baseURL": entry["base_url"],
-                         "apiKey": f"{{env:{entry['api_key_env']}}}"},
-            "models": {model: {"name": model} for model in sorted(referenced[name])},
-        }
-    missing = set(referenced) - set(generated)
-    if missing:
-        raise ConfigError(f"no [[expt.provider]] for: {sorted(missing)}")
-    data["providers"] = generated
-
-    destination = book.root / "working" / "opencode.jsonc"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return destination
-
-
-def pipeline_config(book: Book, entry: dict) -> dict:
-    """Adapter configuration for one combo: its models plus the generated file."""
-    config = copy.deepcopy(book.config)
-    pair = combo_pair(entry)
-    config["models"]["transcribe"] = {
-        "model": pair["transcribe"]["spec"],
-        "thinking": pair["transcribe"]["thinking"]}
-    config["models"]["verify"] = {
-        "model": pair["verify"]["spec"],
-        "thinking": pair["verify"]["thinking"]}
-    config.setdefault("transcriber", {})
-    config["transcriber"]["opencode_config"] = str(generate_opencode_config(book))
-    return config
-
-
-def active_combo(book: Book) -> dict | None:
-    """The combo driving plain transcribe/verify, if one is selected."""
-    active = int(expt_settings(book).get("active") or 0)
-    return combos(book).get(active)
-
-
 # ── Runner ──────────────────────────────────────────────────────────────
 def run_expt(book: Book, *, batch_no: int | None = None,
              combo_ids: list[str] | None = None, message: str = "",
              force: bool = False) -> int:
     """Execute one experiment round; see the module docstring for semantics."""
     ensure_workspace(book)
-    declared = set(combos(book))
+    declared = set(combo_mod.combos(book))
     selected = [str(value) for value in (combo_ids or [])]
     unknown = [value for value in selected if int(value) not in declared]
     if unknown:
-        raise ConfigError(f"unknown combo id(s): {unknown}; add them with "
-                          "'pdfoenix init --combo'")
+        raise ConfigError(f"unknown combo id(s): {unknown}; declare them as "
+                          "[[expt.combo]] in config.toml")
     if batch_no is None:
         if not selected:
             raise ConfigError("select combos with --combo <id> [...] or --all")
@@ -316,7 +208,7 @@ def run_expt(book: Book, *, batch_no: int | None = None,
 def run_cell(book: Book, batch_no: int, combo_id: str,
              force: bool = False) -> bool:
     """Run (or resume) one (batch, combo) cell; returns True when complete."""
-    entry = combos(book)[int(combo_id)]
+    entry = combo_mod.combos(book)[int(combo_id)]
     cell = expt_dir(book) / f"batch_{batch_no}" / f"combo_{combo_id}"
     batches_root = cell / "batches"
     batches_root.mkdir(parents=True, exist_ok=True)
@@ -325,14 +217,11 @@ def run_cell(book: Book, batch_no: int, combo_id: str,
         return True
 
     windows = window_plan(book)
-    config = pipeline_config(book, entry)
+    config = combo_mod.pipeline_config(book, entry)
     attempts = int(expt_settings(book).get("attempts", 4))
     workers = int(expt_settings(book).get("max_workers", 2))
     progress = _Progress(cell / "progress.json")
 
-    from concurrent.futures import ThreadPoolExecutor
-
-    results: list[bool] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(_transcribe_window, book, config, cell,
                                first, last, attempts, progress,
@@ -362,18 +251,6 @@ def run_cell(book: Book, batch_no: int, combo_id: str,
     return True
 
 
-def _make_adapter(book: Book, config: dict, telemetry: Telemetry):
-    """Adapter factory kept separate so tests can inject a fake model.
-
-    Task books always come from the book's ``presets/``; the generated
-    OpenCode config lives elsewhere and must not move them.
-    """
-    from pdfoenix.transcribe.opencode import OpenCodeTranscriber
-
-    return OpenCodeTranscriber(book.root, config, telemetry=telemetry,
-                               max_workers=1, presets_dir=book.root / "presets")
-
-
 def _transcribe_window(book: Book, config: dict, cell: Path,
                        first: int, last: int, attempts: int,
                        progress: "_Progress",
@@ -386,15 +263,15 @@ def _transcribe_window(book: Book, config: dict, cell: Path,
     target = cell / "batches" / f"{unit}.md"
     if not force and target.exists() and progress.get(unit) == "done":
         return True
-    task = (f"PDF pages {first}-{last}. Transcribe these pages in order.")
     images = [book.page_image(page) for page in range(first, last + 1)]
     for attempt in range(1, attempts + 1):
         telemetry = Telemetry(book.root, db_path=db_path(book),
                               combo_id=combo_id, batch_no=batch_no)
-        transcriber = _make_adapter(book, config, telemetry)
+        transcriber = pipeline.make_transcriber(book, telemetry, config=config)
         try:
-            _render_missing(book, range(first, last + 1))
-            text = transcriber.transcribe(images, task)
+            pipeline.render_missing(book, range(first, last + 1))
+            text = transcriber.transcribe(
+                images, pipeline.transcription_task(first, last))
         except OpenCodeError as exc:
             _log(cell, f"{unit} attempt {attempt}: {exc}")
             continue
@@ -417,12 +294,11 @@ def _verify_cell(book: Book, config: dict, cell: Path,
     content, kept = content_for_pages(book, pages, batches_dir=batches_root)
     if not kept:
         raise ConfigError("no transcribed content to verify; windows failed")
-    render_verify_pages(book, kept)
-    images = [book.verify_dir / f"pdfpage_{page:03d}.png" for page in kept]
+    images = pipeline.verify_images(book, kept)
     for attempt in range(1, attempts + 1):
         telemetry = Telemetry(book.root, db_path=db_path(book),
                               combo_id=combo_id, batch_no=batch_no)
-        transcriber = _make_adapter(book, config, telemetry)
+        transcriber = pipeline.make_transcriber(book, telemetry, config=config)
         try:
             corrections = transcriber.verify(images, content)
         except OpenCodeError as exc:
@@ -431,25 +307,14 @@ def _verify_cell(book: Book, config: dict, cell: Path,
         finally:
             transcriber.close()
             telemetry.close()
-        for item in corrections:
-            ledger = Telemetry(book.root, db_path=db_path(book),
-                               combo_id=combo_id, batch_no=batch_no)
-            ledger.record_correction(
-                verify_call_id=item.call_id, unit_id=item.unit_id,
-                formula_id=item.formula_id, severity=item.severity,
-                pattern=item.pattern, source=item.source)
+        ledger = Telemetry(book.root, db_path=db_path(book),
+                           combo_id=combo_id, batch_no=batch_no)
+        try:
+            pipeline.record_corrections(ledger, corrections)
+        finally:
             ledger.close()
         return corrections
     raise ConfigError(f"verify failed after {attempts} attempts")
-
-
-def _render_missing(book: Book, pages) -> None:
-    from pdfoenix.core.render import render_pages
-
-    missing = [page for page in pages if not book.page_image(page).exists()]
-    if missing:
-        render_pages(book.pdf(), missing, book.config["pipeline"]["render_dpi"],
-                     book.pages_dir)
 
 
 class _Progress:
@@ -488,32 +353,31 @@ def _cell_done(book: Book, batch_no: int, combo_id: str) -> bool:
 def structural_stats(batches_root: Path) -> dict:
     """Model-free transcript health: anchors, printed-page labels, markup.
 
-    ``covered_pages`` mirrors :mod:`pdfoenix.verify.content`: anchors with at
-    least one in-range label are trusted verbatim, wholly mislabeled anchors
-    are renumbered positionally, and anchorless files fall back to their first
-    page.  ``anchor_defects`` counts labels outside the batch's own range.
+    ``covered_pages`` follows :func:`pdfoenix.verify.content.anchor_labels`:
+    anchors with at least one in-range label are trusted verbatim, wholly
+    mislabeled anchors are renumbered positionally, and anchorless files fall
+    back to their first page.  ``anchor_defects`` counts labels outside the
+    batch's own range.
     """
     anchors = defects = leaks = 0
     pages: set[int] = set()
     if batches_root.exists():
         for batch in sorted(batches_root.rglob("p*.md")):
             text = batch.read_text(encoding="utf-8")
-            leaks += len(_MARKUP_RE.findall(text))
-            match = _BATCH_STEM_RE.match(batch.stem)
-            if not match:
+            leaks += len(TOOL_MARKUP_RE.findall(text))
+            matches, expected, positional = anchor_labels(text, batch.stem)
+            anchors += len(matches)
+            if not matches:
+                if expected:
+                    pages.add(min(expected))
                 continue
-            first = int(match.group(1))
-            expected = set(range(first, int(match.group(2) or first) + 1))
-            found = [int(value) for value in _ANCHOR_RE.findall(text)]
-            anchors += len(found)
-            if not found:
-                pages.add(first)
-            elif set(found) & expected:
+            if positional:
+                defects += len(matches)   # every label was wrong (printed pages)
+                pages.update(sorted(expected)[:len(matches)])
+            else:
+                found = [int(match.group(1)) for match in matches]
                 defects += sum(1 for page in found if page not in expected)
                 pages.update(set(found) & expected)
-            else:
-                defects += len(found)   # every label was wrong (printed pages)
-                pages.update(sorted(expected)[:len(found)])
     return {"anchor_pages": anchors, "anchor_defects": defects,
             "markup_leaks": leaks, "covered_pages": pages}
 
@@ -532,10 +396,7 @@ def compute_metrics(book: Book, batch_no: int, combo_id: str,
     transcribe_cost = verify_cost = 0.0
     failed = 0
     for call in calls:
-        cost = compute_cost(call["input_text_tokens"],
-                            call["input_vision_tokens"],
-                            call["output_tokens"],
-                            pricing.get(call["model"] or "", {}))
+        cost = call_cost(call, pricing)
         if call["stage"] == "verify":
             verify_cost += cost
         else:
@@ -594,8 +455,8 @@ def cell_rows(book: Book, batch_no: int) -> list[dict]:
     """One row per combo of a batch, with models and latest metrics."""
     rows = []
     for combo_id in batch_members(book, batch_no):
-        entry = combos(book).get(int(combo_id))
-        pair = combo_pair(entry) if entry else None
+        entry = combo_mod.combos(book).get(int(combo_id))
+        pair = combo_mod.combo_pair(entry) if entry else None
         metrics = _metrics_of(book, batch_no, combo_id)
         rows.append(_cell_row(combo_id, pair, metrics))
     return rows
@@ -609,8 +470,8 @@ def combo_rows(book: Book, combo_ids: list[str]) -> list[dict]:
         for combo_id in batch["combos"]:
             if wanted and combo_id not in wanted:
                 continue
-            entry = combos(book).get(int(combo_id))
-            pair = combo_pair(entry) if entry else None
+            entry = combo_mod.combos(book).get(int(combo_id))
+            pair = combo_mod.combo_pair(entry) if entry else None
             metrics = _metrics_of(book, batch["batch_no"], combo_id)
             row = _cell_row(combo_id, pair, metrics)
             row["combo"] = f"{combo_id} (batch_{batch['batch_no']})"
@@ -666,8 +527,8 @@ def report_rows(book: Book, include_hidden: bool = False) -> list[dict]:
                 and str(metrics["combo_id"])
                 not in members.get(metrics["batch_no"], set())):
             continue
-        entry = combos(book).get(int(metrics["combo_id"]))
-        pair = combo_pair(entry) if entry else None
+        entry = combo_mod.combos(book).get(int(metrics["combo_id"]))
+        pair = combo_mod.combo_pair(entry) if entry else None
         row = _cell_row(metrics["combo_id"], pair, dict(metrics))
         row["combo"] = f"{metrics['combo_id']} (batch_{metrics['batch_no']})"
         rows.append(row)
@@ -676,13 +537,11 @@ def report_rows(book: Book, include_hidden: bool = False) -> list[dict]:
 
 def markdown_report(book: Book) -> str:
     """The comparison report: one table plus a cross-batch aggregate."""
+    from pdfoenix.display import markdown_table
+
     rows = report_rows(book)
-    lines = [f"# Experiment report — {book.config['book'].get('title') or book.root.name}",
-             "",
-             "| " + " | ".join(CELL_COLUMNS) + " |",
-             "|" + "---|" * len(CELL_COLUMNS)]
-    for row in rows:
-        lines.append("| " + " | ".join(str(row.get(col, "")) for col in CELL_COLUMNS) + " |")
+    title = book.config["book"].get("title") or book.root.name
+    lines = [f"# Experiment report — {title}", "", markdown_table(rows, CELL_COLUMNS)]
     aggregate: dict[str, list[dict]] = {}
     for row in rows:
         aggregate.setdefault(str(row["combo"]).split(" ", 1)[0], []).append(row)
@@ -707,109 +566,3 @@ def write_report(book: Book) -> Path:
     path = expt_dir(book) / "report.md"
     path.write_text(markdown_report(book), encoding="utf-8")
     return path
-
-
-# ── Combo creation (the only entry point: ``init --combo``) ─────────────
-def load_catalog(book: Book) -> dict:
-    """Provider catalog: the book's presets/providers.toml or the packaged one."""
-    import tomllib
-
-    candidates = [book.root / "presets" / "providers.toml",
-                  Path(__file__).resolve().parent / "presets" / "providers.toml"]
-    for candidate in candidates:
-        if candidate.exists():
-            data = tomllib.loads(candidate.read_text(encoding="utf-8"))
-            return dict(data.get("providers", {}))
-    return {}
-
-
-def create_combo_wizard(book: Book, combo_id: int, *, ask=None,
-                        catalog: dict | None = None) -> dict:
-    """Interactively define one combo.  API keys are never asked."""
-    ask = ask or input
-    catalog = catalog if catalog is not None else load_catalog(book)
-    print(f"combo {combo_id} — models use 'provider/model#thinking'")
-    for name, entry in catalog.items():
-        models = ", ".join(entry.get("models", []))
-        print(f"  {name:<12} {entry.get('base_url', '')}  [{models}]")
-    result = {"id": int(combo_id)}
-    for role in ("transcribe", "verify"):
-        spec = ""
-        while not spec:
-            spec = ask(f"  {role} model: ").strip()
-        result[role] = spec
-    if not str(expt_settings(book).get("pages") or "").strip():
-        pages = ask("  benchmark pages (e.g. 220-224,507-511, empty for now): ").strip()
-    else:
-        pages = ""
-    if pages:
-        result["_pages"] = pages
-    return result
-
-
-def ensure_provider(book: Book, name: str, catalog: dict, *, ask=None) -> dict:
-    """Return the ``[[expt.provider]]`` entry for ``name``, declaring it once."""
-    ask = ask or input
-    known = providers(book)
-    if name in known:
-        return known[name]
-    preset = catalog.get(name, {})
-    base_url = str(preset.get("base_url") or "").strip() or ask(
-        f"  {name} base URL: ").strip()
-    api_key_env = str(preset.get("api_key_env") or "").strip() or ask(
-        f"  {name} key environment variable: ").strip()
-    return {"name": name, "base_url": base_url, "api_key_env": api_key_env}
-
-
-def save_expt_config(book: Book, *, new_providers=(), new_combos=(),
-                     active: int | None = None, pages: str | None = None) -> None:
-    """Persist the expt configuration to config.toml (the only write path)."""
-    from pdfoenix.core.config import load_config, validate_config
-
-    config = load_config(book.root / "config.toml")
-    expt = config.setdefault("expt", {})
-    declared = {str(entry["name"]) for entry in expt.get("provider", [])}
-    for provider in new_providers:
-        if provider["name"] not in declared:
-            expt.setdefault("provider", []).append(provider)
-    known = {int(entry["id"]) for entry in expt.get("combo", [])}
-    for combo in new_combos:
-        if int(combo["id"]) not in known:
-            expt.setdefault("combo", []).append(combo)
-    if pages:
-        expt["pages"] = pages
-    if active:
-        expt["active"] = int(active)
-    validate_config(config)
-    write_config(book.root / "config.toml", config)
-
-
-def ensure_combo(book: Book, combo_id: int, *, ask=None) -> dict:
-    """``init --combo``: adopt an existing combo, or create it via the wizard."""
-    ask = ask or input
-    entry = combos(book).get(int(combo_id))
-    if entry is not None:
-        save_expt_config(book, active=int(combo_id))
-        return entry
-
-    catalog = load_catalog(book)
-    created = create_combo_wizard(book, combo_id, ask=ask, catalog=catalog)
-    pages = created.pop("_pages", None)
-    local: dict[str, dict] = {}
-    for role in ("transcribe", "verify"):
-        name = parse_model_spec(created[role])[0]
-        if name not in local:
-            local[name] = ensure_provider(book, name, catalog, ask=ask)
-    save_expt_config(book, new_providers=local.values(), new_combos=[created],
-                     active=int(combo_id), pages=pages)
-    _remind_exports(local.values())
-    return created
-
-
-def _remind_exports(providers_to_run) -> None:
-    import os
-
-    for provider in providers_to_run:
-        env = provider.get("api_key_env", "")
-        if env and not os.environ.get(env):
-            print(f"reminder: export {env}=... before running experiments")

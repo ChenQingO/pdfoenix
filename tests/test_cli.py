@@ -2,10 +2,10 @@
 import zipfile
 
 import fitz
+import pytest
 
 from pdfoenix.cli import main
 from pdfoenix.core.book import Book
-from pdfoenix.core.pages import batch_ranges
 from pdfoenix.core.telemetry import Telemetry
 from pdfoenix.transcribe.protocol import Correction
 
@@ -96,8 +96,8 @@ def test_cli_smoke_commands(tmp_path, monkeypatch, capsys):
     root = init_book(tmp_path)
     assert main(["-C", str(root), "scout"]) == 0
     assert main(["-C", str(root), "render", "--pages", "1-3"]) == 0
-    assert main(["-C", str(root), "calibrate"]) == 0
-    assert main(["-C", str(root), "report"]) == 0
+    assert main(["-C", str(root), "report", "risk"]) == 0
+    assert main(["-C", str(root), "report", "cost"]) == 0
     assert main(["-C", str(root), "assets"]) == 0
     assert main(["-C", str(root), "check"]) == 0
     assert main(["-C", str(root), "watch", "--once"]) == 0
@@ -117,7 +117,7 @@ def test_cli_transcribe_merge_verify(tmp_path, monkeypatch):
     root = init_book(tmp_path)
     assert main(["-C", str(root), "scout"]) == 0
     fake = FakeTranscriber()
-    monkeypatch.setattr("pdfoenix.cli._make_transcriber",
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber",
                         lambda _book, _telemetry: fake)
 
     assert main(["-C", str(root), "transcribe"]) == 0
@@ -162,14 +162,6 @@ class RecordingTranscriber(FakeTranscriber):
         return super().verify(images, content)
 
 
-def test_batch_ranges_honours_page_selection():
-    assert batch_ranges(1, 10, 5, None) == [(1, 5), (6, 10)]
-    assert batch_ranges(1, 3, 5, {2, 3}) == [(2, 3)]
-    # A gap splits runs so no batch ever spans unselected pages.
-    assert batch_ranges(1, 12, 2, {2, 3, 7, 8, 9}) == [(2, 3), (7, 8), (9, 9)]
-    assert batch_ranges(1, 10, 5, set()) == []
-
-
 def test_cli_transcribe_pages_selection(tmp_path, monkeypatch):
     root = init_book(tmp_path)
     assert main(["-C", str(root), "scout"]) == 0
@@ -177,7 +169,7 @@ def test_cli_transcribe_pages_selection(tmp_path, monkeypatch):
     def factory(_book, telemetry):
         return RecordingTranscriber(telemetry)
 
-    monkeypatch.setattr("pdfoenix.cli._make_transcriber", factory)
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber", factory)
 
     assert main(["-C", str(root), "transcribe", "--pages", "2-3"]) == 0
     batches = root / "working" / "batches" / "ch01"
@@ -192,7 +184,7 @@ def test_cli_verify_pages(tmp_path, monkeypatch):
     def factory(_book, telemetry):
         return RecordingTranscriber(telemetry)
 
-    monkeypatch.setattr("pdfoenix.cli._make_transcriber", factory)
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber", factory)
 
     assert main(["-C", str(root), "transcribe"]) == 0
     assert main(["-C", str(root), "verify", "--pages", "1"]) == 0
@@ -204,3 +196,73 @@ def test_cli_verify_pages(tmp_path, monkeypatch):
     finally:
         telemetry.close()
     assert verify_calls
+
+
+# ── Argument surface (uniformity rules) ─────────────────────────────────
+PIPELINE_COMMANDS = ("init", "scout", "render", "transcribe", "merge", "assets",
+                     "verify", "check", "build", "inspect")
+
+
+@pytest.mark.parametrize("command", (*PIPELINE_COMMANDS, "watch", "report", "expt"))
+def test_every_command_has_help(command):
+    with pytest.raises(SystemExit) as exc:
+        main([command, "--help"])
+    assert exc.value.code == 0
+
+
+def test_unknown_command_or_flag_exits_2():
+    with pytest.raises(SystemExit) as exc:
+        main(["frobnicate"])
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
+        main(["check", "--bogus"])
+    assert exc.value.code == 2
+
+
+def test_report_and_expt_require_subcommand():
+    for command in ("report", "expt"):
+        with pytest.raises(SystemExit) as exc:
+            main([command])
+        assert exc.value.code == 2
+        with pytest.raises(SystemExit) as exc:
+            main([command, "bogus"])
+        assert exc.value.code == 2
+
+
+def test_scope_and_force_flags_are_uniform():
+    from pdfoenix.cli import _build_parser
+
+    parser = _build_parser()
+    for command in ("render", "transcribe", "verify"):
+        args = parser.parse_args([command, "--pages", "1-3", "--force"])
+        assert args.pages == "1-3" and args.force
+    for command in ("transcribe", "merge", "verify"):
+        args = parser.parse_args([command, "--chapter", "ch02"])
+        assert args.chapter == "ch02"
+    # merge is chapter-scoped only (its unit is the section file)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["merge", "--pages", "1"])
+
+
+def test_output_and_input_overrides():
+    from pdfoenix.cli import _build_parser
+
+    parser = _build_parser()
+    assert parser.parse_args(["build", "--out", "x.epub"]).out == "x.epub"
+    assert parser.parse_args(["inspect", "a/b.epub"]).epub == "a/b.epub"
+    assert parser.parse_args(["inspect"]).epub is None
+
+
+def test_verify_audit_and_expt_flag_wiring():
+    from pdfoenix.cli import _build_parser
+
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["verify", "--audit", "sometimes"])
+    assert parser.parse_args(["verify", "--audit", "apply"]).audit == "apply"
+    args = parser.parse_args(
+        ["expt", "run", "--batch", "2", "--combo", "1", "3", "-m", "note", "--force"])
+    assert args.batch == 2 and args.combo == [1, 3]
+    assert args.message == "note" and args.force
+    assert parser.parse_args(["report", "quality", "--all"]).all
+    assert parser.parse_args(["report", "cost", "--by", "chapter"]).by == "chapter"

@@ -7,7 +7,7 @@ from typing import ClassVar
 import fitz
 import pytest
 
-from pdfoenix import expt
+from pdfoenix import combo, expt
 from pdfoenix.core.book import Book
 from pdfoenix.core.config import (
     DEFAULT_CONFIG,
@@ -54,7 +54,7 @@ class FakeAdapter:
 
     made: ClassVar[list] = []
 
-    def __init__(self, _book, _config, telemetry):
+    def __init__(self, _book, telemetry, **_kwargs):
         self.telemetry = telemetry
         FakeAdapter.made.append(self)
 
@@ -83,7 +83,7 @@ class FakeAdapter:
 @pytest.fixture
 def fake_adapter(monkeypatch):
     FakeAdapter.made = []
-    monkeypatch.setattr("pdfoenix.expt._make_adapter", FakeAdapter)
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber", FakeAdapter)
     return FakeAdapter
 
 
@@ -109,7 +109,7 @@ def test_config_rejects_invalid_combos(tmp_path):
 
 def test_combo_pair_resolves_thinking_default(tmp_path):
     book = make_book(tmp_path)
-    pair = expt.combo_pair(expt.combos(book)[1])
+    pair = combo.combo_pair(combo.combos(book)[1])
     assert pair["transcribe"] == {"spec": "acme/writer", "model": "writer",
                                   "thinking": "default"}
     assert pair["verify"]["model"] == "checker"
@@ -117,7 +117,7 @@ def test_combo_pair_resolves_thinking_default(tmp_path):
 
 def test_generate_opencode_config_from_providers(tmp_path):
     book = make_book(tmp_path)
-    path = expt.generate_opencode_config(book)
+    path = combo.generate_opencode_config(book)
     data = path.read_text(encoding="utf-8")
     assert '"baseURL": "http://acme.test/v1"' in data
     assert "{env:ACME_API_KEY}" in data
@@ -228,7 +228,8 @@ def test_ledger_migrates_old_experiment_id(tmp_path):
 
 
 # ── CLI surface ─────────────────────────────────────────────────────────
-def test_init_combo_wizard_and_expt_display(tmp_path, monkeypatch, capsys):
+def test_combos_are_declared_by_hand_and_displayed(tmp_path, capsys):
+    """Combos are plain config.toml entries; init never asks anything."""
     pdf = tmp_path / "book.pdf"
     doc = fitz.open()
     doc.new_page()
@@ -236,27 +237,27 @@ def test_init_combo_wizard_and_expt_display(tmp_path, monkeypatch, capsys):
     doc.close()
     root = tmp_path / "the_book"
 
-    answers = iter(["acme/writer#high", "acme/checker", "1-1",
-                    "http://acme.test/v1", "ACME_API_KEY"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     from pdfoenix.cli import main
 
-    assert main(["init", str(root), "--pdf", str(pdf), "--combo", "2"]) == 0
+    assert main(["init", str(root), "--pdf", str(pdf)]) == 0
     config = load_config(root / "config.toml")
-    created = [entry for entry in config["expt"]["combo"]
-               if entry["id"] == 2]
-    assert created == [
-        {"id": 2, "transcribe": "acme/writer#high", "verify": "acme/checker"}]
-    # the quality-winning default combo 1 ships with the defaults
+    # the value-sweet-spot default combo 1 ships with the defaults
     assert any(entry["id"] == 1 for entry in config["expt"]["combo"])
-    assert config["expt"]["active"] == 2
-    assert config["expt"]["pages"] == "1-1"
 
-    # second init call adopts the same combo without asking anything
-    monkeypatch.setattr("builtins.input",
-                        lambda _prompt: pytest.fail("wizard should not run"))
-    assert main(["init", str(root), "--combo", "2"]) == 0
+    # a new combo is added by editing config.toml — the only config file
+    config["expt"]["provider"].append(
+        {"name": "acme", "base_url": "http://acme.test/v1",
+         "api_key_env": "ACME_API_KEY"})
+    config["expt"]["combo"].append(
+        {"id": 2, "transcribe": "acme/writer#high", "verify": "acme/checker"})
+    config["expt"]["active"] = 2
+    config["expt"]["pages"] = "1-1"
+    write_config(root / "config.toml", config)
 
-    assert main(["-C", str(root), "expt"]) == 0
+    book = Book(root)
+    assert combo.active_combo(book)["id"] == 2
+    assert combo.combos(book)[2]["verify"] == "acme/checker"
+
+    assert main(["-C", str(root), "expt", "show"]) == 0
     out = capsys.readouterr().out
     assert "(no rows)" in out
