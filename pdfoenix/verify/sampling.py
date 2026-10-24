@@ -28,7 +28,6 @@ for very small books so the absolute minimum is always respected.
 """
 import math
 import random
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,8 +35,7 @@ from typing import Protocol
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.config import DEFAULT_CONFIG
-
-_PAGE_IMAGE_RE = re.compile(r"pdfpage_(\d+)\.png$")
+from pdfoenix.core.pages import page_number
 
 BANDS = ("low", "medium", "high")
 
@@ -223,11 +221,11 @@ def compute_page_risks(book: Book, settings: SamplingSettings | None = None) -> 
 
     risks: dict[int, int] = {}
     for image in book.pages_dir.glob("pdfpage_*.png"):
-        page = _page_number(image)
+        page = page_number(image)
         if page is not None:
             risks[page] = 0
     for page_path, formula_ids in registry.get("page_to_formulas", {}).items():
-        page = _page_number(Path(page_path))
+        page = page_number(Path(page_path))
         if page is None:
             continue
         values = [formula_risk.get(formula_id, 0) for formula_id in formula_ids]
@@ -257,11 +255,6 @@ def sample_pages(
     if not page_risks:
         raise SamplingError("no candidate page images found; run 'pdfoenix render' first")
     return chosen.select(page_risks, settings, rng or random.Random(settings.seed))
-
-
-def _page_number(path: Path) -> int | None:
-    match = _PAGE_IMAGE_RE.search(path.name)
-    return int(match.group(1)) if match else None
 
 
 def _budget_pages(budget: str | int, total: int) -> int:

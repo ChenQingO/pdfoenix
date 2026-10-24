@@ -31,8 +31,9 @@ from pathlib import Path
 from typing import Any
 
 from pdfoenix.core.config import load_config
+from pdfoenix.core.pages import PAGE_ANCHOR_RE
 from pdfoenix.core.telemetry import Telemetry
-from pdfoenix.transcribe.protocol import Correction
+from pdfoenix.transcribe.protocol import TOOL_MARKUP_RE, Correction
 
 #: Agent ids defined by ``presets/opencode.jsonc``.
 TRANSCRIBE_AGENT = "pdfoenix-transcribe"
@@ -42,19 +43,10 @@ VERIFY_AGENT = "pdfoenix-verify"
 PROVIDER_NAME = "opencode"
 
 _DEFAULT_COMMAND = ("npx", "opencode")
-_PAGE_ANCHOR_RE = re.compile(r"<!--\s*page\s*:\s*(\d+)\s*-->")
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _OUTER_FENCE_RE = re.compile(
     r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
 _DIGITS_RE = re.compile(r"\d+")
-# A model that ignores the tool-free contract sometimes answers with tool-call
-# markup instead of text (prose first, markup later, or the provider's own
-# tool-call syntax such as DeepSeek's DSML).  That is a failed call, never a
-# transcription, so the opening markers are matched anywhere in the answer.
-_TOOL_MARKUP_RE = re.compile(
-    r"<function=|<invoke|<tool_call|<function_call|<tool_calls|<function_calls|"
-    r"｜｜DSML｜｜",  # noqa: RUF001 - DeepSeek's marker really uses fullwidth pipes
-    re.IGNORECASE)
 
 
 class OpenCodeError(RuntimeError):
@@ -198,7 +190,7 @@ def _page_sections(content: str) -> tuple[str, dict[int, str]] | None:
     Returns ``None`` when there are no page anchors, which tells the caller to
     fall back to a single verification call for the whole unit.
     """
-    matches = list(_PAGE_ANCHOR_RE.finditer(content))
+    matches = list(PAGE_ANCHOR_RE.finditer(content))
     if not matches:
         return None
     preamble = content[:matches[0].start()]
@@ -440,7 +432,7 @@ class OpenCodeTranscriber:
                 text=text, session_id=session_id, returncode=result.returncode,
                 stderr=stderr, latency_ms=latency_ms,
                 error=f"exit code {result.returncode}: {stderr.strip()}")
-        if text and _TOOL_MARKUP_RE.search(text):
+        if text and TOOL_MARKUP_RE.search(text):
             return _CallOutcome(
                 text=text, session_id=session_id, returncode=result.returncode,
                 stderr=stderr, latency_ms=latency_ms,

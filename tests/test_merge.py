@@ -4,7 +4,7 @@ footnotes, seams, table extraction, idempotency."""
 import pytest
 
 from pdfoenix.core.book import Book
-from pdfoenix.core.merge import MergeError, MergeOverrides, merge_chapter
+from pdfoenix.core.merge import MergeError, merge_chapter
 
 
 def make_book(tmp_path, batches: dict[str, str]) -> Book:
@@ -93,55 +93,6 @@ def test_bidirectional_index_consistent(tmp_path):
     reg = book.state.load("formulas")
     for eq_id, page in reg["formula_to_page"].items():
         assert eq_id in reg["page_to_formulas"][page]
-
-
-def test_footnote_rename_and_relocate(tmp_path):
-    text = r"""# Chapter 3. T {#ch-3}
-
-## 3.1 Intro {#sec-3-1}
-
-<!-- page:100 -->
-Some claim[^fn-p100-1].
-
-[^fn-p100-1]: A note.
-"""
-    book = make_book(tmp_path, {"p100-100": text})
-    ov = MergeOverrides(footnote_rename={"[^fn-p100-1]": "[^ch3s1-1]"})
-    s = merge_chapter(book, "ch03", ov)
-    body = sec(book, "sec3-1.md")
-    assert "[^ch3s1-1]" in body
-    assert "[^ch3s1-1]: A note." in body
-    assert s.footnotes == 1
-
-
-def test_seam_join_across_page_anchor(tmp_path):
-    a = r"""# Chapter 3. T {#ch-3}
-
-## 3.1 Intro {#sec-3-1}
-
-<!-- page:100 -->
-We compute the integral of"""
-    b = r"""<!-- page:101 -->
-the density, namely, $f$.
-"""
-    book = make_book(tmp_path, {"p100-100": a, "p101-101": b})
-    ov = MergeOverrides(seams=[(r"integral of\s+the density",
-                                "integral of the density")])
-    merge_chapter(book, "ch03", ov)
-    assert "the integral of the density" in sec(book, "sec3-1.md")
-
-
-def test_fix_literal_replace(tmp_path):
-    text = r"""# Chapter 3. T {#ch-3}
-
-## 3.1 Intro {#sec-3-1}
-
-<!-- page:100 -->
-Rotenberg (1977).
-"""
-    book = make_book(tmp_path, {"p100-100": text})
-    merge_chapter(book, "ch03", MergeOverrides(fixes=[("Rotenberg", "Rothenberg")]))
-    assert "Rothenberg" in sec(book, "sec3-1.md")
 
 
 def test_figure_placeholder(tmp_path):

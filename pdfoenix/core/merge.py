@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.config import risk_weights
+from pdfoenix.core.pages import PAGE_LINE_RE, batch_stem
 from pdfoenix.core.risk import risk_score
 
 
@@ -34,8 +35,6 @@ class MergeError(ValueError):
     """Raised when the batch structure cannot be merged."""
 
 
-# A page anchor occupies its own line.
-PAGE_RE = re.compile(r"^\s*<!--\s*page\s*:\s*(\d+)\s*-->\s*$")
 # The chapter title line (a h1 starting with "Chapter", in any capitalization).
 H1_RE = re.compile(r"^#\s+Chapter\b.*$", re.IGNORECASE)
 # The pieces of a chapter title, used to normalize model output such as
@@ -45,7 +44,7 @@ _ANCHOR_TAIL_RE = re.compile(r"\{#([A-Za-z0-9_-]+)\}\s*$")
 # A section heading; group 1 is its first token, e.g. "3.2" or "Problems".
 H2_RE = re.compile(r"(?m)^##\s+(\S+)")
 # A printed equation number written as "\qquad (N)".
-NUMBER_RE = re.compile(r"\\qquad\s*\((\d+)\)")
+EQ_NUMBER_RE = re.compile(r"\\qquad\s*\((\d+)\)")
 # A single-line footnote definition.
 FOOTNOTE_DEF_RE = re.compile(r"^\[\^([A-Za-z0-9_-]+)]:(.*)$")
 # A figure placeholder, e.g. "<!-- FIGURE 8.1. Caption: ... Content: ... -->".
@@ -58,18 +57,6 @@ SUBSECTION_KEY_RE = re.compile(r"^(\d+\.\d+)\.\d+$")
 # An existing image reference, e.g. "![Figure 3.1.](figures/fig3-1.png)".
 IMAGE_RE = re.compile(r"^!\[([^]]*)]\((figures/[^)]+)\)\s*$")
 FIGURE_ID_RE = re.compile(r"figures/([^/]+)\.png$")
-
-
-@dataclass
-class MergeOverrides:
-    """Per-chapter corrections applied during merge (all optional)."""
-
-    title: str | None = None
-    seams: list = field(default_factory=list)          # [(regex, replacement), ...]
-    fixes: list = field(default_factory=list)          # [(old, new), ...]
-    figs: list = field(default_factory=list)           # [(regex, replacement), ...]
-    footnote_rename: dict = field(default_factory=dict)  # batch-local id -> chapter id
-    strip_extra: list = field(default_factory=list)    # extra comment-stripping regexes
 
 
 @dataclass
@@ -86,7 +73,7 @@ class MergeSummary:
 
 
 # ── Text primitives ─────────────────────────────────────────────────────
-def strip_comments(text: str, extra=()) -> str:
+def strip_comments(text: str) -> str:
     """Remove HTML comments but keep the four meaningful kinds.
 
     ``uncertain`` (fidelity notes), ``page`` (anchors), ``FIGURE`` and ``TABLE``
@@ -95,8 +82,6 @@ def strip_comments(text: str, extra=()) -> str:
     text = re.sub(
         r"<!--(?!\s*(?:uncertain|page|FIGURE|TABLE)\b).*?-->",
         "", text, flags=re.DOTALL)
-    for pattern in extra:
-        text = re.sub(pattern, "", text, flags=re.DOTALL)
     kept = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -259,7 +244,7 @@ def _detect_table(lines, i):
     return i, end, label, lines[i], lines[cursor:end]
 
 
-def _table_filename(table_id: str) -> str:
+def table_filename(table_id: str) -> str:
     """Markdown filename for a table id ("3.2" -> "tab3-2.md")."""
     return f"tab{table_id.replace('.', '-')}.md"
 
@@ -288,7 +273,7 @@ def _register_figure(figure_reg, figure_id, image, caption, description, page):
 
 def _emit_table(book, chapter, table_reg, table_id, caption, rows, page) -> str:
     """Write and register a table, returning the placeholder for the section."""
-    filename = _table_filename(table_id)
+    filename = table_filename(table_id)
     _write_table(book, chapter, filename, caption, rows)
     table_reg["tables"][table_id] = {
         "caption": caption.strip() if caption else None,
@@ -300,20 +285,18 @@ def _emit_table(book, chapter, table_reg, table_id, caption, rows, page) -> str:
 
 # ── Section processing (page tracking + object extraction) ──────────────
 def _process_section(text, chapter, chapter_num, key, book, weights,
-                     formula_reg, figure_reg, table_reg, seams=()):
+                     formula_reg, figure_reg, table_reg):
     """Clean one section, register its objects, and return its final Markdown.
 
     Page anchors are tracked per line so each object can record its page before
-    the anchors are stripped.  Seam repairs are applied afterward, because a
-    page anchor sitting between two halves of a sentence would block ``\\s+``
-    matching.
+    the anchors are stripped.
     """
     lines = text.splitlines()
 
     # page_for_line[i] is the page in effect for line i (None for anchor lines).
     page_for_line, current_page = [], None
     for line in lines:
-        match = PAGE_RE.match(line)
+        match = PAGE_LINE_RE.match(line)
         if match:
             current_page = int(match.group(1))
             page_for_line.append(None)
@@ -324,7 +307,7 @@ def _process_section(text, chapter, chapter_num, key, book, weights,
     i = 0
     while i < len(lines):
         line = lines[i]
-        if PAGE_RE.match(line):
+        if PAGE_LINE_RE.match(line):
             i += 1
             continue
         page = page_for_line[i]
@@ -338,7 +321,7 @@ def _process_section(text, chapter, chapter_num, key, book, weights,
             if end < len(lines):
                 latex = "\n".join(lines[i + 1:end])
                 eq_seq += 1
-                number_match = NUMBER_RE.search(latex)
+                number_match = EQ_NUMBER_RE.search(latex)
                 eq_id = f"eq{chapter_num}-{key.replace('.', '-')}-{eq_seq}"
                 if eq_id in formula_reg["formulas"]:      # idempotent overwrite
                     formula_reg["formulas"].pop(eq_id, None)
@@ -399,10 +382,7 @@ def _process_section(text, chapter, chapter_num, key, book, weights,
         output.append(line)
         i += 1
 
-    joined = "\n".join(output)
-    for pattern, replacement in seams:
-        joined = sub_re(pattern, replacement, joined)
-    return normalize(joined)
+    return normalize("\n".join(output))
 
 
 # ── Merge entry points ──────────────────────────────────────────────────
@@ -424,9 +404,9 @@ def _read_chapter_stream(book: Book, chapter: str) -> str:
     parts = []
     for batch_path in batches:
         text = batch_path.read_text(encoding="utf-8")
-        match = re.match(r"p(\d+)-", batch_path.stem)
-        if match and not PAGE_RE.search(text):
-            text = f"<!-- page:{int(match.group(1))} -->\n\n" + text
+        bounds = batch_stem(batch_path.stem)
+        if bounds and not PAGE_LINE_RE.match(text):
+            text = f"<!-- page:{bounds[0]} -->\n\n" + text
         parts.append(text)
     return "\n\n".join(parts)
 
@@ -445,25 +425,17 @@ def _drop_chapter_entries(registry, chapter_num):
                 registry["page_to_formulas"].pop(page_key)
 
 
-def merge_chapter(book: Book, chapter: str, overrides: MergeOverrides | None = None,
-                  telemetry=None) -> MergeSummary:
+def merge_chapter(book: Book, chapter: str, telemetry=None) -> MergeSummary:
     """Merge one chapter and return a summary of what was produced."""
-    overrides = overrides or MergeOverrides()
     chapter_num = chapter_number(chapter)
     weights = risk_weights(book.config)
 
     stream = _read_chapter_stream(book, chapter)
-    stream = strip_comments(stream, overrides.strip_extra)
-    for old, new in overrides.footnote_rename.items():
-        stream = stream.replace(old, new)
+    stream = strip_comments(stream)
     stream, footnote_defs = extract_footnote_defs(stream)
-    for old, new in overrides.fixes:
-        stream = stream.replace(old, new)
-    for pattern, replacement in overrides.figs:
-        stream = sub_re(pattern, replacement, stream, flags=re.DOTALL)
 
     # Pull the chapter title out of the stream (first "# Chapter" line).
-    title = overrides.title
+    title = None
     kept = []
     for line in stream.splitlines():
         if title is None and H1_RE.match(line.strip()):
@@ -484,7 +456,7 @@ def merge_chapter(book: Book, chapter: str, overrides: MergeOverrides | None = N
         raise MergeError(f"{chapter} has no '## ' section headings")
     page_of_line, current_page = [], None
     for line in lines:
-        match = PAGE_RE.match(line)
+        match = PAGE_LINE_RE.match(line)
         if match:
             current_page = int(match.group(1))
             page_of_line.append(None)
@@ -535,7 +507,7 @@ def merge_chapter(book: Book, chapter: str, overrides: MergeOverrides | None = N
         key = _first_key(text)
         section_texts[filename] = _process_section(
             text, chapter, chapter_num, key, book, weights,
-            formula_reg, figure_reg, table_reg, overrides.seams)
+            formula_reg, figure_reg, table_reg)
 
     # Append each footnote definition to the section that references it.
     for footnote_id, definition in footnote_defs.items():
@@ -554,8 +526,7 @@ def merge_chapter(book: Book, chapter: str, overrides: MergeOverrides | None = N
     if title:
         (output_dir / "00_chapter.md").write_text(title + "\n", encoding="utf-8")
     else:
-        warnings.append(
-            "no chapter title found (no '# Chapter' line and no overrides.title)")
+        warnings.append("no chapter title found (no '# Chapter' line)")
     for filename, text in section_texts.items():
         (output_dir / filename).write_text(text, encoding="utf-8")
 
@@ -590,13 +561,9 @@ def merge_chapter(book: Book, chapter: str, overrides: MergeOverrides | None = N
     return summary
 
 
-def merge_book(book: Book, overrides=None, telemetry=None) -> dict[str, MergeSummary]:
-    """Merge every chapter.  ``overrides`` may be one object or a per-chapter map."""
+def merge_book(book: Book, telemetry=None) -> dict[str, MergeSummary]:
+    """Merge every chapter."""
     summaries = {}
     for chapter in book.chapters():
-        chapter_overrides = overrides
-        if isinstance(overrides, dict):
-            chapter_overrides = overrides.get(chapter)
-        summaries[chapter] = merge_chapter(
-            book, chapter, chapter_overrides, telemetry)
+        summaries[chapter] = merge_chapter(book, chapter, telemetry)
     return summaries

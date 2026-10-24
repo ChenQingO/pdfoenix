@@ -12,15 +12,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pdfoenix.core.book import Book, natural_key
+from pdfoenix.core.merge import EQ_NUMBER_RE, table_filename
+from pdfoenix.core.pages import PAGE_ANCHOR_RE
 
 LINK_RE = re.compile(r"]\(#([A-Za-z0-9_-]+)\)")
 ANCHOR_RE = re.compile(r"\{#([A-Za-z0-9_-]+)")
 FN_DEF_RE = re.compile(r"^\[\^([A-Za-z0-9_-]+)]", re.MULTILINE)
 FN_USE_RE = re.compile(r"\[\^([A-Za-z0-9_-]+)](?!:)")
-EQ_NUM_RE = re.compile(r"\\qquad\s*\((\d+)\)")
 TABLE_PH_RE = re.compile(r"<!--\s*TABLE\s+([0-9A-Za-z.\-]+)\s*-->")
 IMG_RE = re.compile(r"!\[[^]]*]\((figures/[^)]+)\)")
-PAGE_RE = re.compile(r"<!--\s*page\s*:\s*\d+\s*-->")
 HEADING_LINE_RE = re.compile(r"^#{1,3} ")
 
 
@@ -39,7 +39,6 @@ class CheckReport:
     """Collected findings plus a few summary statistics."""
 
     issues: list = field(default_factory=list)
-    eq_ranges: dict = field(default_factory=dict)
     footnotes: int = 0
 
     @property
@@ -149,9 +148,8 @@ def check_book(book: Book, expected: dict | None = None) -> CheckReport:
             location = f"{chapter}/{path.name}"
 
             if path.name.startswith("sec"):
-                numbers = [int(n) for n in EQ_NUM_RE.findall(text)]
+                numbers = [int(n) for n in EQ_NUMBER_RE.findall(text)]
                 if numbers:
-                    report.eq_ranges[location] = (numbers[0], numbers[-1])
                     if numbers != list(range(numbers[0], numbers[-1] + 1)):
                         report.add(
                             "eq_gap", location,
@@ -184,7 +182,7 @@ def check_book(book: Book, expected: dict | None = None) -> CheckReport:
 
                 # Table placeholders must resolve to a table Markdown file.
                 for table_id in TABLE_PH_RE.findall(text):
-                    table_file = directory / f"tab{table_id.replace('.', '-')}.md"
+                    table_file = directory / table_filename(table_id)
                     if not table_file.exists():
                         report.add(
                             "table", location,
@@ -192,7 +190,7 @@ def check_book(book: Book, expected: dict | None = None) -> CheckReport:
                             f"{table_file.name}")
 
                 # Page anchors must not survive into the manuscript.
-                if PAGE_RE.search(text):
+                if PAGE_ANCHOR_RE.search(text):
                     report.add("page_anchor", location,
                                "page anchor left in the manuscript")
 

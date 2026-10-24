@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from pdfoenix.core.config import DEFAULT_CONFIG, deep_merge, load_config
+from pdfoenix.core.pages import chapter_spans
 from pdfoenix.core.state import StateStore
 
 
@@ -67,10 +68,6 @@ class Book:
         return self.root / "figures"
 
     @property
-    def tables_dir(self) -> Path:
-        return self.root / "tables"
-
-    @property
     def working_dir(self) -> Path:
         return self.root / "working"
 
@@ -85,10 +82,6 @@ class Book:
     @property
     def verify_dir(self) -> Path:
         return self.working_dir / "verify"
-
-    @property
-    def zoom_dir(self) -> Path:
-        return self.working_dir / "zoom"
 
     @property
     def state_dir(self) -> Path:
@@ -154,3 +147,28 @@ class Book:
     def page_image(self, page_no: int) -> Path:
         """Path of the rendered page image for a 1-based PDF page number."""
         return self.pages_dir / f"pdfpage_{page_no:03d}.png"
+
+    def pdf_page_count(self) -> int:
+        """Number of pages in the source PDF."""
+        import fitz
+
+        with fitz.open(self.pdf()) as doc:
+            return doc.page_count
+
+    def chapter_ranges(self) -> dict[str, tuple[int, int]]:
+        """Map ``chNN`` ids to inclusive PDF page ranges from the scout state.
+
+        Returns an empty mapping before ``scout`` has run.  The last chapter
+        extends to the end of the PDF; when the PDF cannot be opened (read-only
+        views on a half-set-up book) the last chapter's start page is used as a
+        conservative stand-in.
+        """
+        scout = self.state.load("scout")
+        chapters = scout.get("chapters", [])
+        if not chapters:
+            return {}
+        try:
+            last_page = self.pdf_page_count()
+        except Exception:
+            last_page = max(int(item["pdf_page"]) for item in chapters)
+        return chapter_spans(chapters, last_page)

@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from pdfoenix.core.book import Book
+from pdfoenix.core.merge import table_filename
 from pdfoenix.core.postprocess import postprocess_epub
 
 TABLE_PH_RE = re.compile(r"<!--\s*TABLE\s+([0-9A-Za-z.\-]+)\s*-->")
@@ -34,7 +35,7 @@ def inline_tables(text: str, chapter_dir: Path) -> str:
     """Replace ``<!-- TABLE X.Y -->`` placeholders with ``tabX-Y.md`` content."""
     def replace(match):
         table_id = match.group(1)
-        table_file = chapter_dir / f"tab{table_id.replace('.', '-')}.md"
+        table_file = chapter_dir / table_filename(table_id)
         if table_file.exists():
             return table_file.read_text(encoding="utf-8").strip()
         return match.group(0)      # leave the placeholder if the file is missing

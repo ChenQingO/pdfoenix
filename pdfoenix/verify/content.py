@@ -5,13 +5,10 @@ The merged manuscript has page anchors stripped, so the batches remain the only
 place where page -> text is still explicit.  Legacy batches without anchors fall
 back to their filename's first page, matching ``core.merge``'s behaviour.
 """
-import re
 from pathlib import Path
 
 from pdfoenix.core.book import Book
-
-PAGE_RE = re.compile(r"^\s*<!--\s*page\s*:\s*(\d+)\s*-->\s*$", re.MULTILINE)
-_BATCH_RE = re.compile(r"p(\d+)(?:-(\d+))?$")
+from pdfoenix.core.pages import PAGE_LINE_RE, batch_stem
 
 
 def collect_page_content(book: Book, batches_dir=None) -> dict[int, str]:
@@ -38,25 +35,35 @@ def content_for_pages(book: Book, pages, batches_dir=None) -> tuple[str, list[in
     return "\n\n".join(parts), kept
 
 
+def anchor_labels(text: str, stem):
+    """Classify a batch's page-anchor labels against its file-name bounds.
+
+    Returns ``(matches, expected, positional)``: the page-anchor matches in
+    order, the set of PDF pages the batch claims (empty when the stem carries
+    no page range), and whether every label is wrong so the sections must be
+    renumbered positionally.  Models sometimes copy the printed page numbers
+    shown on the scan instead of the PDF page numbers; renumbering keeps the
+    content recoverable and shrinks the defect to wrong labels.
+    """
+    matches = list(PAGE_LINE_RE.finditer(text))
+    bounds = batch_stem(stem)
+    expected = set(range(bounds[0], bounds[1] + 1)) if bounds else set()
+    anchored = {int(match.group(1)) for match in matches}
+    positional = bool(expected) and bool(matches) and not expected & anchored
+    return matches, expected, positional
+
+
 def _split_batch(text: str, batch: Path) -> dict[int, str]:
     """Map a batch's page sections to PDF page numbers.
 
-    Anchors normally carry the PDF page number.  A model may instead copy the
-    printed page numbers shown on the scan; when none of the anchors fall
-    inside the batch's own page range (taken from its filename), the sections
-    are renumbered positionally.  The pages then stay recoverable and the
-    defect shrinks to wrong labels on correct content, not missing content.
+    Anchors normally carry the PDF page number.  When they are wholly
+    mislabeled (printed page labels), the sections are renumbered positionally
+    per :func:`anchor_labels`.
     """
-    matches = list(PAGE_RE.finditer(text))
-    bounds = _BATCH_RE.match(batch.stem)
-    start = int(bounds.group(1)) if bounds else None
-    stop = int(bounds.group(2) or bounds.group(1)) if bounds else None
+    matches, expected, positional = anchor_labels(text, batch.stem)
+    start = min(expected) if expected else None
     if not matches:
         return {start: text.strip()} if start is not None else {}
-
-    expected = set(range(start, stop + 1)) if start is not None else set()
-    anchored = {int(match.group(1)) for match in matches}
-    positional = bool(expected) and not expected & anchored
 
     sections: dict[int, str] = {}
     preamble = text[:matches[0].start()].strip()

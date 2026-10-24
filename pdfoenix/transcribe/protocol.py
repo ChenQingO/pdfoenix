@@ -13,6 +13,7 @@ A correction is deliberately small and normalized: severity and source are
 controlled vocabularies so the ledger can group and join them, while ``pattern``
 uses the ``X→Y`` shape consumed by the global-audit grep pass.
 """
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,15 @@ from typing import Protocol, runtime_checkable
 
 #: Allowed values for :attr:`Correction.severity`.
 SEVERITIES = ("introduced", "faithful", "style")
+
+# A model that ignores the tool-free contract sometimes answers with tool-call
+# markup instead of text (prose first, markup later, or the provider's own
+# tool-call syntax such as DeepSeek's DSML).  That is a failed call, never a
+# transcription, so the opening markers are matched anywhere in the answer.
+TOOL_MARKUP_RE = re.compile(
+    r"<function=|<invoke|<tool_call|<function_call|<tool_calls|<function_calls|"
+    r"｜｜DSML｜｜",  # noqa: RUF001 - DeepSeek's marker really uses fullwidth pipes
+    re.IGNORECASE)
 
 
 @dataclass(frozen=True)
