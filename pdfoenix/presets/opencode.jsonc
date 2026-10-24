@@ -1,34 +1,15 @@
 {
-  // Default OpenCode configuration for pdfoenix.
+  // Internal template for pdfoenix's model adapter.  NOT user configuration.
   //
-  // This file is copied into each book as <book>/presets/opencode.jsonc, so the
-  // pipeline never needs to modify the user's global ~/.config/opencode files.
-  // Set the gateway URL below and set MIMO_API_KEY in the environment.  You may
-  // also replace the apiKey placeholder with a literal key; books/ is gitignored.
+  // Every book's ``working/opencode.jsonc`` is generated from this file plus
+  // the [[expt.provider]] / [[expt.combo]] entries in the book's config.toml.
+  // Users configure models and gateways in config.toml only; the generated
+  // file is an artifact and must not be edited.
   //
-  // The adapter points OPENCODE_CONFIG at this file and invokes one of the two
-  // agents below. Both agents are deliberately tool-free: page images arrive as
-  // attachments and every answer must be returned as text on stdout. The model
-  // and thinking variant are selected by the adapter from config.toml
-  // ([models.transcribe] / [models.verify]), so this file is safe to share.
+  // The two agents below are deliberately tool-free: page images arrive as
+  // attachments and every answer must be returned as text on stdout.
   "$schema": "https://opencode.ai/config.json",
   "snapshots": false,
-  "providers": {
-    "mimo": {
-      "name": "MiMo",
-      "canonical": "xiaomi",
-      "settings": {
-        "baseURL": "https://your-gateway.example.com/v1",
-        "apiKey": "{env:MIMO_API_KEY}"
-      },
-      "models": {
-        "mimo-v2.6-flash": { "name": "MiMo v2.6 Flash" },
-        "mimo-v2.6-pro": { "name": "MiMo v2.6 Pro" },
-        "mimo-v2.6-pro-ultraspeed": { "name": "MiMo v2.6 Pro Ultra" },
-        "mimo-v2.5": { "name": "MiMo v2.5" }
-      }
-    }
-  },
   "agents": {
     "pdfoenix-transcribe": {
       "description": "Transcribe attached page scans into Markdown. Text output only.",

@@ -29,7 +29,7 @@ def test_scaffold_creates_full_layout(tmp_path):
                      "state", "logs", "build", "styles", "presets"):
         assert (root / relative).is_dir()
     assert (root / "source" / "source.pdf").exists()
-    assert (root / "presets" / "opencode.jsonc").exists()
+    assert (root / "presets" / "config.schema.toml").exists()
     assert (root / "presets" / "transcribe.md").exists()
     assert (root / "presets" / "pricing.toml").exists()
     assert (root / "styles" / "epub.css").exists()

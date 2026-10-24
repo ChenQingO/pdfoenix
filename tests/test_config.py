@@ -5,8 +5,10 @@ from pdfoenix.core.config import (
     DEFAULT_CONFIG,
     ConfigError,
     deep_merge,
+    diff_config,
     load_config,
     risk_weights,
+    write_config,
 )
 
 
@@ -23,7 +25,7 @@ def test_defaults_when_no_file():
     assert cfg["sampling"]["min_pages"] == 10
     assert cfg["sampling"]["min_rate"] == 0.10
     assert cfg["review"]["global_audit"] is True
-    assert cfg["logging"]["level"] == "info"
+    assert cfg["transcriber"]["timeout"] == 3600
 
 
 def test_partial_override_preserves_siblings(tmp_path):
@@ -64,9 +66,9 @@ def test_invalid_page_risk_raises(tmp_path):
         load_config(p)
 
 
-def test_invalid_log_level_raises(tmp_path):
+def test_invalid_transcriber_timeout_raises(tmp_path):
     p = tmp_path / "config.toml"
-    p.write_text('[logging]\nlevel = "verbose"\n', encoding="utf-8")
+    p.write_text('[transcriber]\ntimeout = -1\n', encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(p)
 
@@ -121,3 +123,28 @@ def test_invalid_sampling_probability_raises(tmp_path):
     p.write_text("[sampling]\nhigh_prob = 1.5\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(p)
+
+
+def test_diff_config_keeps_only_overrides():
+    cfg = load_config()
+    assert diff_config(cfg) == {}
+    cfg["book"]["title"] = "My Book"
+    cfg["expt"]["pages"] = "220-224"
+    diff = diff_config(cfg)
+    assert diff == {"book": {"title": "My Book"}, "expt": {"pages": "220-224"}}
+    # user extras not present in the defaults are always kept
+    cfg["extra"] = {"flag": True}
+    assert diff_config(cfg)["extra"] == {"flag": True}
+
+
+def test_write_config_writes_diffs_only(tmp_path):
+    cfg = load_config()
+    cfg["book"]["title"] = "My Book"
+    cfg["pipeline"]["batch_pages"] = 8
+    path = tmp_path / "config.toml"
+    write_config(path, cfg)
+    text = path.read_text(encoding="utf-8")
+    assert 'title = "My Book"' in text
+    assert "batch_pages = 8" in text
+    assert "render_dpi" not in text        # unchanged default is omitted
+    assert load_config(path) == cfg        # round-trip: same effective config

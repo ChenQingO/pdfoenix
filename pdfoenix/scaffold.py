@@ -1,9 +1,9 @@
 """Create a new book directory (``pdfoenix init``).
 
-The scaffold is deliberately boring: directories, a full ``config.toml`` derived
-from the built-in defaults, a copy of every preset, and empty state registries.
-It is idempotent: rerunning fills missing files and never clobbers an existing
-configuration unless ``force`` is set.
+The scaffold is deliberately boring: directories, a ``config.toml`` holding
+only the values that differ from the built-in defaults, a copy of every
+preset, and empty state registries.  It is idempotent: rerunning fills missing
+files and never clobbers an existing configuration unless ``force`` is set.
 """
 import copy
 import shutil
@@ -14,8 +14,6 @@ from pdfoenix.core.config import DEFAULT_CONFIG, load_config, write_config
 from pdfoenix.core.state import StateStore
 
 _PRESET_FILES = (
-    "opencode.jsonc",
-    "providers.toml",
     "transcribe.md",
     "verify.md",
     "pricing.toml",
@@ -28,7 +26,6 @@ _DIRECTORIES = (
     "figures",
     "working/pages",
     "working/verify",
-    "working/zoom",
     "working/batches",
     "state",
     "logs",

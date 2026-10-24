@@ -1,5 +1,7 @@
 # Default pdfoenix configuration.  A book's config.toml may override any key;
 # missing keys are filled from these values by core.config.load_config.
+# This file is a human-readable reference kept in sync with DEFAULT_CONFIG
+# (tests/test_presets.py enforces the sync).
 
 [book]
 title = ""
@@ -14,24 +16,12 @@ verify_dpi = 300
 verify_chunk_size = 5
 
 [transcriber]
-provider = "opencode"
-opencode_config = "presets/opencode.jsonc"
+timeout = 3600
 
-[models.transcribe]
-model = ""
-thinking = "high"
-
-[models.verify]
-model = ""
-thinking = "high"
-
-[models.classify]
-model = ""
-thinking = "low"
-
-# Model combinations: the pair behind the two billed agents.  Combo 1 is the
-# benchmark's quality winner and ships by default; add more via
-# `pdfoenix init --combo <id>`.  Keys are never stored: export api_key_env.
+# Model wiring: the pair behind the two billed agents.  Combo 1 is the
+# benchmark's value sweet spot and ships by default.  Add combos by hand —
+# they are immutable, so create a new id to change a pair.  Keys are never
+# stored: export the declared api_key_env instead.
 [expt]
 pages = ""
 max_workers = 2
@@ -43,10 +33,15 @@ name = "mimo"
 base_url = "https://api.xiaomimimo.com/v1"
 api_key_env = "MIMO_API_KEY"
 
+[[expt.provider]]
+name = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+
 [[expt.combo]]
 id = 1
-transcribe = "mimo/mimo-v2.6-pro-ultraspeed"
-verify = "mimo/mimo-v2.6-pro"
+transcribe = "mimo/mimo-v2.6-pro"
+verify = "deepseek/deepseek-flash#high"
 
 [sampling]
 strategy = "risk_distribution"
@@ -71,7 +66,3 @@ bigop = 2
 
 [review]
 global_audit = true
-
-[logging]
-level = "info"
-verbose = false

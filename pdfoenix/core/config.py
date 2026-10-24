@@ -27,13 +27,7 @@ DEFAULT_CONFIG = {
         "verify_chunk_size": 5,    # pages per single verification call
     },
     "transcriber": {
-        "provider": "opencode",
-        "opencode_config": "presets/opencode.jsonc",
-    },
-    "models": {
-        "transcribe": {"model": "", "thinking": "high"},
-        "verify": {"model": "", "thinking": "high"},
-        "classify": {"model": "", "thinking": "low"},
+        "timeout": 3600,           # per-process timeout in seconds
     },
     "sampling": {
         "strategy": "risk_distribution",
@@ -50,13 +44,12 @@ DEFAULT_CONFIG = {
         "seed": 0,                 # deterministic sampling by default
     },
     "review": {"global_audit": True},
-    "logging": {"level": "info", "verbose": False},
-    # Model-combination experiments (``pdfoenix expt``).  A combo is the model
-    # pair behind the two billed agents; combos are append-only: to change one,
-    # create a new id or edit the file by hand.  Combo 1 is the quality winner
-    # of the 2026-10 benchmark (55 corrections/100 pages on dense math) and is
-    # provided by default; ``active`` selects the pair behind plain transcribe
-    # and verify.
+    # Model wiring (``pdfoenix expt`` and the production pipeline).  A combo is
+    # the model pair behind the two billed agents; combos are immutable: to
+    # change one, create a new id.  Combo 1 is the value-sweet-spot pair of the
+    # 2026-10 benchmark (50-65 corrections/100 pages at $0.13/10 pages);
+    # ``active`` selects the pair behind plain transcribe and verify.  Add
+    # combos by hand — no preset catalog can cover real needs.
     "expt": {
         "pages": "",               # benchmark page spec, e.g. "220-224,507-511"
         "max_workers": 2,          # concurrent windows per combo
@@ -65,15 +58,15 @@ DEFAULT_CONFIG = {
         "provider": [
             {"name": "mimo", "base_url": "https://api.xiaomimimo.com/v1",
              "api_key_env": "MIMO_API_KEY"},
+            {"name": "deepseek", "base_url": "https://api.deepseek.com",
+             "api_key_env": "DEEPSEEK_API_KEY"},
         ],
         "combo": [
-            {"id": 1, "transcribe": "mimo/mimo-v2.6-pro-ultraspeed",
-             "verify": "mimo/mimo-v2.6-pro"},
+            {"id": 1, "transcribe": "mimo/mimo-v2.6-pro",
+             "verify": "deepseek/deepseek-flash#high"},
         ],
     },
 }
-
-_LOG_LEVELS = {"debug", "info", "warning", "error"}
 
 
 def deep_merge(base: dict, override: dict) -> dict:
@@ -136,15 +129,10 @@ def validate_config(cfg: dict) -> None:
         raise ConfigError(
             "sampling.budget must be an integer (page count) or a percentage string")
 
-    if cfg["logging"]["level"] not in _LOG_LEVELS:
-        raise ConfigError(f"logging.level must be one of {sorted(_LOG_LEVELS)}")
-
-    models = cfg["models"]
-    if not isinstance(models, dict):
-        raise ConfigError("models must be a table")
-    for role, spec in models.items():
-        if not isinstance(spec, dict) or "model" not in spec or "thinking" not in spec:
-            raise ConfigError(f"models.{role} must define both 'model' and 'thinking'")
+    timeout = cfg["transcriber"]["timeout"]
+    if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
+            or timeout <= 0):
+        raise ConfigError("transcriber.timeout must be a positive number")
 
     _validate_expt(cfg.get("expt", {}))
 
@@ -254,12 +242,33 @@ def risk_weights(cfg: dict) -> dict:
     return {**DEFAULT_WEIGHTS, **cfg["sampling"]["risk_weights"]}
 
 
-# ── Serialization (init and the expt wizard own config.toml writes) ──────
+# ── Serialization (init and the combo wizard own config.toml writes) ────
+def diff_config(config: dict, defaults: dict | None = None) -> dict:
+    """Return only the values that differ from the built-in defaults.
+
+    ``config.toml`` documents itself as an override file ("only lists values
+    that differ"), and both writers go through this so a book's file never
+    turns into an opaque full snapshot.  Keys absent from the defaults (user
+    extras) are always kept.
+    """
+    base = DEFAULT_CONFIG if defaults is None else defaults
+    out = {}
+    for key, value in config.items():
+        reference = base.get(key)
+        if isinstance(value, dict) and isinstance(reference, dict):
+            nested = diff_config(value, reference)
+            if nested:
+                out[key] = nested
+        elif value != reference:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
 def write_config(path, config: dict) -> None:
-    """Write a merged configuration as TOML (tables and arrays of tables)."""
+    """Write a configuration as TOML, keeping only values that differ."""
     from pathlib import Path
 
-    Path(path).write_text(dump_table(config) + "\n", encoding="utf-8")
+    Path(path).write_text(dump_table(diff_config(config)) + "\n", encoding="utf-8")
 
 
 def dump_table(data: dict, prefix: str = "") -> str:
