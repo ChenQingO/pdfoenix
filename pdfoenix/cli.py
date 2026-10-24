@@ -296,8 +296,15 @@ def cmd_verify(args) -> int:
 
     telemetry = pipeline.production_ledger(book)
     transcriber = pipeline.make_transcriber(book, telemetry)
+    telemetry.emit_event("dispatch", stage="verify", unit=f"p{kept[0]}-{kept[-1]}")
+    telemetry.emit_event("agent_start", agent="verify")
     try:
         corrections = transcriber.verify(images, content)
+    except Exception:
+        telemetry.emit_event("agent_fail", agent="verify")
+        raise
+    else:
+        telemetry.emit_event("agent_done", agent="verify")
         pipeline.save_corrections(book, telemetry, corrections)
         for page in kept:
             pipeline.set_progress(book, f"verify/p{page}", status="done")

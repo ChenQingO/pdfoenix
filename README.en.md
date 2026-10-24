@@ -621,6 +621,24 @@ For live progress use two terminals; `pdfoenix transcribe && pdfoenix watch` wor
 `watch` only starts **after** transcribe finishes. Press `Ctrl-C` to exit. Without `rich`
 installed the dashboard falls back to plain-text frames.
 
+A frame looks like this (mid-transcription):
+
+```text
+pdfoenix · My Book
+────────────────────────────────────────────────────────────────────────
+chapter  stage       transcribe        verify   objects         corr  cost
+-------  ----------  ----------------  -------  --------------  ----  -----
+ch01     verify      5/5               2 pages  104 eq · 8 fig  1     $0.05
+ch02     transcribe  0/5 1 run 1 fail  -        -               1     $0.00
+────────────────────────────────────────────────────────────────────────
+$0.05 · 2 calls · 104k tokens · 2 agents active · 2 pages verified · 2 corrections · 1 failure
+```
+
+One row per chapter: batch progress (done/total, `run` = in flight, `fail` = failed),
+verified pages, merged formulas/figures, corrections and cost; the bottom line is the
+book-wide total. The dashboard itself is read-only — every number comes from state files
+the pipeline has already written.
+
 ## Project structure
 
 ```text

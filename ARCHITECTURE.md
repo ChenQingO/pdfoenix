@@ -319,21 +319,24 @@ output = 5.0
 
 ## 11. 可视化：`pdfoenix watch`
 
-rich TUI 实时看板，**只读视图**（tail `pipeline.db` + `state/progress.json`），与编排器零耦合：
+只读实时看板（tail `pipeline.db` + `state/progress.json` + 磁盘上的批次文件），
+与编排器零耦合。每章一行渲染真实进度（批次完成数、在跑/失败、已复核页、
+公式/图、纠错、花费），底部是全书汇总：
 
 ```
-┌─ pdfoenix · An Introduction ─────────────────────────────────┐
-│ ch08  ✓ done         104 formulas · 8 figs · $0.41           │
-│ ch09  verify   ▓▓▓▓▓░░ 5/7 pages   (3 子代理活跃)            │
-│   ├─ p399-403  转写中   [deepseek · high]   ▸ 180s           │
-│   ├─ p404-408  转写中   [deepseek · high]   ▸ 175s           │
-│   └─ p409-413  排队                                            │
-│ ch10  scout    pending                                        │
-│ 累计：$1.23 · 87 次调用 · 412k token · 3 代理并行             │
-└──────────────────────────────────────────────────────────────┘
+pdfoenix · My Book
+────────────────────────────────────────────────────────────────────────
+chapter  stage       transcribe        verify   objects         corr  cost
+-------  ----------  ----------------  -------  --------------  ----  -----
+ch01     verify      5/5               2 pages  104 eq · 8 fig  1     $0.05
+ch02     transcribe  0/5 1 run 1 fail  -        -               1     $0.00
+────────────────────────────────────────────────────────────────────────
+$0.05 · 2 calls · 104k tokens · 2 agents active · 2 pages verified · 2 corrections · 1 failure
 ```
 
-一章一行（阶段 + 进度 + 子代理数），展开看批级状态；「opencode 在干嘛/派了几个子代理」由 `dispatch`/`agent_start`/`agent_done` 事件驱动。
+stage 取自进度本身：`pending → transcribe → merge → merged → verify`；
+「在跑/失败」由 `dispatch`/`agent_start`/`agent_done`/`agent_fail` 事件与
+`progress.units` 的失败标记驱动。
 
 ## 12. config.toml schema
 

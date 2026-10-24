@@ -9,7 +9,7 @@ from pdfoenix.core.telemetry import Telemetry
 from pdfoenix.watch import _watch_rich, dashboard_data, render_dashboard, watch
 
 
-def make_book(tmp_path):
+def make_book(tmp_path, *, batch_pages=5):
     pdf = tmp_path / "source.pdf"
     doc = fitz.open()
     doc.new_page()
@@ -19,7 +19,8 @@ def make_book(tmp_path):
     (tmp_path / "source").mkdir()
     (tmp_path / "source" / "book.pdf").write_bytes(pdf.read_bytes())
     book = Book(tmp_path, config={"book": {"title": "Dashboard Book",
-                                           "pdf": "source/book.pdf"}})
+                                           "pdf": "source/book.pdf"},
+                                  "pipeline": {"batch_pages": batch_pages}})
     book.state.save("scout", {
         "page_offset": 0,
         "chapters": [{"number": "1", "title": "One", "pdf_page": 1,
@@ -41,9 +42,10 @@ def test_dashboard_data_and_text(tmp_path):
 
     data = dashboard_data(book)
     assert data["title"] == "Dashboard Book"
-    assert data["chapters"][0]["name"] == "ch01"
-    assert data["chapters"][0]["status"] == "merged"
-    assert data["chapters"][0]["formulas"] == 3
+    row = data["chapters"][0]
+    assert row["name"] == "ch01"
+    assert row["stage"] == "merged"
+    assert row["formulas"] == 3
     assert data["totals"]["calls"] == 1
     assert data["totals"]["tokens"] == 1100
     assert data["totals"]["agents"] == 1
@@ -51,7 +53,51 @@ def test_dashboard_data_and_text(tmp_path):
     text = render_dashboard(book)
     assert "Dashboard Book" in text
     assert "ch01" in text
-    assert "3 formulas" in text
+    assert "3 eq" in text
+    assert "1 agent active" in text
+
+
+def test_frame_shows_batch_progress_running_and_failures(tmp_path):
+    book = make_book(tmp_path, batch_pages=1)   # pages 1 and 2 -> 2 batches
+    book.state.update("progress", lambda data: data["chapters"].__setitem__(
+        "ch01", {"merged": False}))
+    (book.batches_dir / "ch01").mkdir(parents=True)
+    (book.batches_dir / "ch01" / "p1-1.md").write_text("# one\n", encoding="utf-8")
+    book.state.update("progress", lambda data: data["units"].update({
+        "transcribe/ch01/p2-2": {"status": "failed"},
+    }))
+    telemetry = Telemetry(tmp_path)
+    telemetry.emit_event("agent_start", agent="ch01/p2-2")
+    telemetry.close()
+
+    row = dashboard_data(book)["chapters"][0]
+    assert row["batches_done"] == 1
+    assert row["batches_total"] == 2
+    assert row["stage"] == "transcribe"
+    assert row["running"] == 1
+    assert row["failed"] == 1
+
+    text = render_dashboard(book)
+    assert "1/2" in text
+    assert "1 run" in text
+    assert "1 fail" in text
+
+
+def test_verified_pages_and_corrections_map_to_chapters(tmp_path):
+    book = make_book(tmp_path)
+    book.state.update("progress", lambda data: data["units"].update({
+        "verify/p1": {"status": "done"},
+    }))
+    book.state.update("corrections", lambda data: data["corrections"].append(
+        {"unit_id": "p1-2", "severity": "introduced", "pattern": "a→b"}))
+
+    data = dashboard_data(book)
+    row = data["chapters"][0]
+    assert row["verified"] == 1
+    assert row["corrections"] == 1
+    assert row["stage"] == "verify"
+    assert data["totals"]["verified"] == 1
+    assert data["totals"]["corrections"] == 1
 
 
 class FakeTTY(io.StringIO):

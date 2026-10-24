@@ -573,6 +573,23 @@ pdfoenix -C books/my_book watch --interval 2
 但 `watch` 会在 transcribe **结束后**才启动。按 `Ctrl-C` 退出看板。
 未安装 `rich` 时自动回退为纯文本帧。
 
+一帧长这样（转写进行中）：
+
+```text
+pdfoenix · My Book
+────────────────────────────────────────────────────────────────────────
+chapter  stage       transcribe        verify   objects         corr  cost
+-------  ----------  ----------------  -------  --------------  ----  -----
+ch01     verify      5/5               2 pages  104 eq · 8 fig  1     $0.05
+ch02     transcribe  0/5 1 run 1 fail  -        -               1     $0.00
+────────────────────────────────────────────────────────────────────────
+$0.05 · 2 calls · 104k tokens · 2 agents active · 2 pages verified · 2 corrections · 1 failure
+```
+
+每章一行：批次进度（完成/总数，`run` = 在跑，`fail` = 失败）、已复核页数、
+合并后的公式/图、纠错数与花费；底部是全书汇总。看板本身只读，
+所有数字都来自流水线已落盘的状态文件。
+
 ## 项目结构
 
 ```text

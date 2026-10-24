@@ -12,14 +12,20 @@ def print_table(rows: Sequence[dict], columns: Sequence[str]) -> None:
     if not rows:
         print("(no rows)")
         return
+    print(format_table(rows, columns))
+
+
+def format_table(rows: Sequence[dict], columns: Sequence[str]) -> str:
+    """Render an aligned plain-text table (header, separator, rows)."""
     widths = {column: max([len(str(column))]
                           + [len(_cell(row.get(column))) for row in rows])
               for column in columns}
-    print("  ".join(str(column).ljust(widths[column]) for column in columns))
-    print("  ".join("-" * widths[column] for column in columns))
+    lines = ["  ".join(str(column).ljust(widths[column]) for column in columns),
+             "  ".join("-" * widths[column] for column in columns)]
     for row in rows:
-        print("  ".join(_cell(row.get(column)).ljust(widths[column])
-                        for column in columns))
+        lines.append("  ".join(_cell(row.get(column)).ljust(widths[column])
+                               for column in columns))
+    return "\n".join(lines)
 
 
 def markdown_table(rows: Sequence[dict], columns: Sequence[str]) -> str:
