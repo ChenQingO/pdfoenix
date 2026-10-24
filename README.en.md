@@ -12,7 +12,7 @@ figures, and tables accurate. See [ARCHITECTURE.md](ARCHITECTURE.md) for the ful
 [简体中文](README.md) · **English**
 
 [Features](#features) · [Installation](#installation) · [Quick Start](#quick-start) ·
-[Usage](#usage) · [Configuration](#configuration) · [Development](#development)
+[Command Handbook](#command-handbook) · [Configuration](#configuration) · [FAQ](#faq)
 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white)
 ![uv](https://img.shields.io/badge/uv-package%20manager-8A2BE2)
@@ -24,7 +24,8 @@ figures, and tables accurate. See [ARCHITECTURE.md](ARCHITECTURE.md) for the ful
 ## What it is
 
 `pdfoenix` is a command-line pipeline that turns a **scanned PDF** (especially a math-heavy old
-book) into a **modern EPUB**.
+book) into a **modern EPUB**. Run it command by command, or script the whole book; interrupted
+runs resume where they left off, and every cent spent on models is on the books.
 
 It does not aim for a pixel-perfect copy. It aims for:
 
@@ -32,6 +33,9 @@ It does not aim for a pixel-perfect copy. It aims for:
 - **Faithful formulas** — LaTeX, with the original equation numbers preserved
 - **Addressable objects** — every figure, table, and formula can be located and re-checked
 - **Accountable cost** — every model call is recorded, so cost/quality experiments are possible
+
+> The project is in **alpha**: the pipeline can already produce complete books, but formatting
+> conventions and edge cases are still settling down. Issues welcome.
 
 ## Features
 
@@ -43,14 +47,6 @@ It does not aim for a pixel-perfect copy. It aims for:
 | **Adversarial review**  | Transcription and verification use different models; risky pages are sampled and fully reviewed                     |
 | **Pluggable**           | The `Transcriber` protocol, sampling strategy, risk weights, thresholds, and probabilities are all configurable     |
 
-## Current status
-
-- `init/scout/render/transcribe/merge/verify/assets/check/build/inspect/watch/report/expt/calibrate` are all available.
-- Sampling now has absolute and relative floors: formula-sparse books are filled randomly to `min_pages` / `min_rate` instead of being almost skipped.
-- `books/an_introduction` has been reindexed: 1531 formulas, chapter progress, and a dangling-anchor whitelist.
-- `pdfoenix check` is clean; `pdfoenix build` produces an EPUB; `pdfoenix inspect` passes.
-- Full `pytest`, `ruff`, and duplicate-code checks pass.
-
 ## How it works
 
 ```text
@@ -58,31 +54,31 @@ PDF
  │
  ├─ scout      scan the text layer; find chapters/sections/figures/tables/equations
  ├─ render     render pages to images
- ├─ transcribe vision model transcribes each page → Markdown + LaTeX
- ├─ merge      merge batches, split sections, register objects
+ ├─ transcribe vision model transcribes page by page → Markdown + LaTeX
+ ├─ merge      merge batches, split into sections, register objects
  ├─ assets     crop figures (optional)
- ├─ verify     another model reviews sampled pages
- ├─ check      local rule-based validation
- ├─ build      pandoc → EPUB
- └─ inspect    structural EPUB checks
+ ├─ verify     another model reviews a sample of pages
+ ├─ check      local rule validation
+ ├─ build      pandoc assembles the EPUB
+ └─ inspect    check the EPUB structure
 ```
 
 ## Installation
 
 ### Requirements
 
-| Dependency                       | Purpose                               | Version                         |
-|----------------------------------|---------------------------------------|---------------------------------|
-| Python                           | Run the pipeline                      | 3.12+                           |
-| [uv](https://docs.astral.sh/uv/) | Environment and dependency management | latest                          |
-| pandoc                           | Build EPUB                            | 3.x                             |
-| Node.js + OpenCode               | Call vision models                    | Node 20+                        |
-| Model gateway                    | Transcription / verification          | any OpenCode-supported provider |
+| Dependency                       | Purpose                  | Requirement               |
+|----------------------------------|--------------------------|---------------------------|
+| Python                           | run the pipeline         | 3.12+                     |
+| [uv](https://docs.astral.sh/uv/) | environment & deps       | latest                    |
+| pandoc                           | build the EPUB           | 3.x                       |
+| Node.js + OpenCode               | call vision models       | Node 20+                  |
+| Model gateway                    | transcribe / verify      | any OpenCode provider     |
 
-> The PDF must have a **text layer** so `scout` can find the structure. For image-only scans,
-> run OCR first, for example `ocrmypdf input.pdf output.pdf`.
+> The PDF must carry a **text layer** (used by `scout`). For pure image scans, OCR first,
+> e.g. `ocrmypdf input.pdf output.pdf`.
 
-### One-command setup
+### One-shot environment setup
 
 ```bash
 git clone https://github.com/<your-name>/pdfoenix.git
@@ -91,36 +87,31 @@ cd pdfoenix
 source .venv/bin/activate
 ```
 
-The default configuration comes from experiments with MiMo and DeepSeek. It aims for the best
-possible quality at the lowest possible cost; it is a trade-off, not a quality-first optimum.
-If you want better quality, try a stronger model or another agent. Because the project has many
-configuration options, you can delegate changes to an agent if you decide to switch.
+`start.sh` only sets up the environment; it never runs the book pipeline. It installs `uv`,
+creates `.venv` (Python 3.12), installs dependencies, and installs `pandoc` and `opencode` if
+missing.
 
-`start.sh` only prepares the environment; it never runs a book pipeline. It installs `uv`,
-creates `.venv` with Python 3.12, installs the package, and installs `pandoc` / `opencode` if
-they are missing.
+The default configuration comes from experiments with MiMo and DeepSeek and tries to get the
+highest quality at the lowest possible cost. It is a trade-off, not the quality optimum. If you
+want better quality, switch to stronger models or another agent. The project has many
+configuration knobs; if you decide to change models, delegate the task to an agent that can edit
+the configuration and help you run it.
 
-### Configure the model (project-local)
+### Configuring models (config.toml only)
 
-pdfoenix reads **the book's own** `presets/opencode.jsonc`; you do not need to
-edit `~/.config/opencode`. `pdfoenix init` copies the packaged template to
-`books/my_book/presets/opencode.jsonc`.
-
-Put the key in an environment variable:
-
-```bash
-export MIMO_API_KEY="your-key"
-```
-
-Then edit `books/my_book/presets/opencode.jsonc` and set
-`providers.mimo.settings.baseURL` to your gateway. You may also write the key
-directly into that file; `books/` is ignored by Git, so it is never committed.
-
-For an existing book created from the old template, overwrite it once:
+Models, gateways, and combos **all live in each book's `config.toml`** — no other file needs
+touching. The default configuration generated by `init` already ships the official MiMo and
+DeepSeek gateways plus a ready-to-use combo; you only put keys into the environment:
 
 ```bash
-cp pdfoenix/presets/opencode.jsonc books/my_book/presets/opencode.jsonc
+export MIMO_API_KEY="your-key"        # transcription side of the default combo
+export DEEPSEEK_API_KEY="your-key"    # verification side of the default combo
 ```
+
+To change gateways, edit `base_url` in `[[expt.provider]]`. Keys travel through environment
+variables only (`api_key_env`) and never touch disk. The packaged `presets/opencode.jsonc` is
+just the agent-skeleton template; `working/opencode.jsonc` is generated at runtime — an
+artifact you never edit.
 
 ## Quick start
 
@@ -132,14 +123,14 @@ pdfoenix init books/my_book \
   --author "Author" \
   --page-offset 18
 
-# 2. Run one chapter first
+# 2. Try one chapter first
 pdfoenix -C books/my_book scout
 pdfoenix -C books/my_book transcribe --chapter ch01
 pdfoenix -C books/my_book merge --chapter ch01
 pdfoenix -C books/my_book verify --chapter ch01 --full
 pdfoenix -C books/my_book build
 
-# 3. Then run the whole book
+# 3. Once satisfied, run the whole book
 pdfoenix -C books/my_book transcribe
 pdfoenix -C books/my_book merge
 pdfoenix -C books/my_book assets
@@ -149,12 +140,9 @@ pdfoenix -C books/my_book build
 pdfoenix -C books/my_book inspect
 ```
 
-The EPUB is written to `books/my_book/build/book.epub`.
+The artifact lands in `books/my_book/build/book.epub`.
 
-> Every stage is idempotent. To resume after an interruption, run the same command again.
-> Use `--force` only when you really want to redo completed work.
-
-### Optional: cover image
+### Optional: cover
 
 If you have a cover, just drop it into the book's `source/` directory:
 
@@ -162,52 +150,256 @@ If you have a cover, just drop it into the book's `source/` directory:
 books/my_book/source/cover.jpg
 ```
 
-`build` automatically uses `source/cover.*` as the EPUB cover. Keep only one cover file
-(the first one in sorted order is used).
+`build` automatically uses `source/cover.*` as the EPUB cover; no configuration needed.
+`.jpg`, `.jpeg`, `.png` and friends work. Keep exactly one cover file; the first in sort order
+wins.
 
-## Usage
+## Command handbook
 
-### `-C / --book`
+### Uniform rules (read this first)
 
-`-C` (same as `--book`) selects the **book directory to operate on**. The default is the current
-directory (`.`).
+Every command obeys four rules. Once you know them, `--help` is self-explanatory.
+
+**1. Selecting the book: `-C / --book`**
+
+`-C` (same as `--book`) selects **the book directory to operate on**; the default is `.`:
 
 ```bash
-# These are equivalent
-cd books/my_book && pdfoenix check
-pdfoenix -C books/my_book check
+pdfoenix -C books/my_book check        # operate on any book from anywhere
+cd books/my_book && pdfoenix check     # equivalent
 ```
 
-With `-C`, you can run commands from anywhere in the repository, or from a script, without
-`cd`-ing into the book directory first.
+**2. Scope: `--chapter` / `--pages`**
 
-### Command reference
+Scope options do exactly one thing: **restrict the work to the given scope and touch nothing
+outside it**.
 
-| Command                                                    | Description                                                             |
-|------------------------------------------------------------|-------------------------------------------------------------------------|
-| `pdfoenix init <book> --pdf a.pdf`                         | Scaffold directories, `config.toml`, presets, and empty registries      |
-| `pdfoenix scout`                                           | Scan the PDF text layer → `state/scout.json`                            |
-| `pdfoenix render`                                          | Render page images → `working/pages/` (optional; transcribe fills gaps) |
-| `pdfoenix transcribe [--chapter ch01] [--force]`           | Batch transcription → `working/batches/`                                |
-| `pdfoenix merge [--chapter ch01]`                          | Merge batches, split sections, register objects → `manuscript/`         |
-| `pdfoenix assets [--force] [--no-auto]`                    | Crop figures; auto-detect or use registry `crop`                        |
-| `pdfoenix verify [--full\|--pages 19-23] [--chapter ch01]` | Sampled review; `--full` reviews everything                             |
-| `pdfoenix check`                                           | Validate numbering, footnotes, links, registries, and residue           |
-| `pdfoenix build [--out book.epub]`                         | Assemble → pandoc → EPUB → post-process                                 |
-| `pdfoenix inspect [--epub path]`                           | Structural EPUB checks                                                  |
-| `pdfoenix watch`                                           | Read-only live dashboard                                                |
-| `pdfoenix report --by model\|chapter`                      | Cost summary                                                            |
-| `pdfoenix expt [--batch N] [--combo ID ...] [-a]`          | Experiment display: batch × combo overview or detail                    |
-| `pdfoenix expt ... --run [-m msg] [--force]`               | Run one experiment round (spend); batches auto-increment                |
-| `pdfoenix expt --report [-a]`                              | Cost-vs-quality comparison + `expt/report.md`                           |
-| `pdfoenix calibrate`                                       | Formula/page risk distribution report                                   |
+| Option          | Meaning                       | Commands                          |
+|-----------------|-------------------------------|-----------------------------------|
+| `--chapter ch09`| only this chapter             | `transcribe`, `merge`, `verify`   |
+| `--pages 19-30,40` | only these pages           | `render`, `transcribe`, `verify`  |
 
-Run `pdfoenix <command> --help` for all options of a command.
+`merge` only has `--chapter`: its unit of work is "one chapter → section files", and slicing by
+page would break registry consistency. For `verify`, `--pages` bypasses sampling (verify exactly
+those pages) while `--chapter` restricts sampling/full verification to one chapter.
+
+**3. Idempotency and `--force`**
+
+All stages are **idempotent**: they skip work units already recorded as done, and rerunning the
+same command resumes after an interruption. `--force` has exactly one meaning — **redo completed
+units** (including refreshing those units' cached inputs, such as page images):
+
+| Command     | What `--force` redoes                                  |
+|-------------|--------------------------------------------------------|
+| `init`      | overwrite existing scaffold files                      |
+| `render`    | re-render existing page images                         |
+| `transcribe`| redo existing batches                                  |
+| `verify`    | redo verified pages (incl. 300 dpi image re-render)    |
+| `assets`    | overwrite existing crops                               |
+| `expt run`  | re-run finished experiment cells                       |
+
+**4. Exit codes and the read/write boundary**
+
+| Code | Meaning                                          | Typical commands               |
+|------|--------------------------------------------------|--------------------------------|
+| 0    | success                                          | all                            |
+| 1    | ran fine but found issues (checks failed / cells)| `check`, `inspect`, `expt run` |
+| 2    | usage error or runtime error                     | all                            |
+
+Read-only commands (**never write files, never spend money**): `watch`, `report cost|quality|risk`,
+`check`, `inspect`, `expt show`. Only two commands call models: `transcribe` and `verify`
+(plus `expt run`).
+
+> Every command supports `pdfoenix <command> --help` for the full option list.
+
+### Pipeline commands (in execution order)
+
+#### `pdfoenix init [TARGET] [--pdf FILE] [--title T] [--author A] [--page-offset N] [--force]`
+
+Scaffolding: directory layout, `config.toml` (only values that differ from the defaults),
+presets, empty state registries. `TARGET` is the book directory (falls back to `-C`);
+`--page-offset` encodes `PDF page = printed page + offset`. Model combos are written by hand
+in `config.toml` (see [Configuration](#configuration)).
+
+#### `pdfoenix scout`
+
+Scan the PDF text layer → `state/scout.json` (chapter/section/figure/table/equation structure).
+Other commands run it automatically when the chapter layout is missing; you rarely need it by
+hand.
+
+#### `pdfoenix render [--pages SPEC] [--force]`
+
+Render page images at `pipeline.render_dpi` (default 150) → `working/pages/`. Optional:
+`transcribe` renders missing pages on demand; use this only to warm the cache in bulk.
+
+#### `pdfoenix transcribe [--chapter chNN] [--pages SPEC] [--force]`
+
+Transcribe in batches → `working/batches/chNN/pXXX-YYY.md`. Batch size comes from
+`pipeline.batch_pages`; every call's tokens/cost go to `logs/pipeline.db`; progress goes to
+`state/progress.json` (the `watch` feed).
+
+#### `pdfoenix merge [--chapter chNN]`
+
+Merge batches, split into sections, register objects → `manuscript/chNN/`, updating
+`state/{formulas,figures,tables}.json`. Page anchors are resolved and stripped from the prose;
+re-merging first drops the chapter's previous contributions, so nothing is registered twice.
+
+#### `pdfoenix assets [--force] [--no-auto]`
+
+Crop figures → `figures/figX-Y.png`. Crop box priority: hand-written `crop` in the registry,
+then auto-detection (OCR captions + ink profiling). Low-confidence detections warn instead of
+cropping. `--no-auto` disables auto-detection.
+
+#### `pdfoenix verify [--chapter chNN] [--pages SPEC] [--full] [--force] [--audit off|dry|apply]`
+
+Sampled verification: pages are sampled by risk (see [Configuration](#configuration)), and a
+different model reviews the full page. Corrections go to `state/corrections.json` and the cost
+ledger.
+
+- `--full` skips sampling and verifies every candidate page; `--pages` verifies explicit pages;
+- `--audit` controls the "global audit" (grep the whole book for the same error pattern):
+  `dry` lists hits (default), `apply` rewrites them, `off` skips. The default can also be
+  disabled via `review.global_audit`.
+
+#### `pdfoenix check`
+
+Local rule validation: equation numbering continuity, footnote balance, cross links, registry
+consistency, residues (`\tag{}`, bare `■`, `\mathcal`), heading anchors. Exit code 1 on errors.
+Legitimate dangling anchors go into `known_dangling.txt` (one id per line).
+
+#### `pdfoenix build [--out book.epub]`
+
+Assemble Markdown (TOC, table inlining) → pandoc → EPUB → postprocess (chapter-end footnotes,
+nav out of the spine). `--out` names the output file inside `build/`. `source/cover.*` becomes
+the cover automatically.
+
+#### `pdfoenix inspect [EPUB]`
+
+Structural EPUB acceptance checks (mimetype position/compression, container.xml, OPF
+manifest/spine, MathML, footnote back-links). Without a path, the newest `.epub` in `build/` is
+checked. Exit code 1 on issues.
+
+### Status and reports
+
+#### `pdfoenix watch [--interval SEC] [--once]`
+
+Read-only live dashboard (see [Live dashboard](#live-dashboard)).
+
+#### `pdfoenix report cost [--by model|chapter]`
+
+Token and cost totals by model or by chapter (`cost_usd` is computed from `presets/pricing.toml`;
+models without a unit price show 0, but token counts are always real).
+
+#### `pdfoenix report quality [--all]`
+
+The experiment **cost-quality comparison**: one row per (batch, combo) cell with coverage,
+corrections per 100 reviewed pages, and cost; also writes `expt/report.md`. `--all` includes
+combos removed from their batch (their data is kept and hidden by default).
+
+#### `pdfoenix report risk`
+
+Formula/page risk distribution report (used to recalibrate sampling thresholds and
+probabilities; read-only, changes no configuration).
+
+### Experiments
+
+One **batch** = one comparison round; one **cell** = one combo's complete run inside a batch
+(artifacts in `expt/batch_N/combo_M/`). Experiments use their own ledger
+(`expt/experiments.db`) and never pollute the production ledger.
+
+#### `pdfoenix expt show [--batch N] [--combo ID ...] [--all]`
+
+Read-only display:
+
+| Invocation                      | Shows                                    |
+|---------------------------------|------------------------------------------|
+| `expt show`                     | overview of all batches                  |
+| `expt show --batch 2`           | cell detail for batch 2                  |
+| `expt show --combo 2 4`         | rows for these combos across batches     |
+| `expt show --batch 2 --combo 4` | preview: what batch 2 with combo 4 would look like (config unchanged) |
+
+#### `pdfoenix expt run [--batch N] [--combo ID ...] [--all] [-m NOTE] [--force]`
+
+Run one experiment round (**spends money**). Without `--batch` a new batch is created; with
+`--batch` the unfinished cells of that batch resume, and if `--combo` is given the batch's combo
+set is replaced and gaps are filled (old data is kept). Finished cells are skipped unless
+`--force`.
+
+```bash
+pdfoenix -C books/my_book report cost --by model      # cost by model
+pdfoenix -C books/my_book expt show                   # batch × combo overview (read-only)
+pdfoenix -C books/my_book expt run --combo 2 4 -m "retest after gateway change"
+pdfoenix -C books/my_book expt run --batch 1          # resume batch 1
+pdfoenix -C books/my_book report quality              # comparison + expt/report.md
+```
+
+#### Hands-on: pick a combo that pays off
+
+If you want to test the cost/quality trade-off yourself, use `expt`. Scenario: the default
+combo works well on your book, but would a cheaper one be good enough? A combo is
+"transcribe model × verify model" — both cost money, so measure before switching.
+
+**Step 1: declare the combos you want to try in `config.toml`** (by hand — there is no
+wizard):
+
+```toml
+[[expt.combo]]
+id = 2
+transcribe = "mimo/mimo-v2.6-pro-ultraspeed"   # faster, pricier transcription
+verify = "deepseek/deepseek-flash#high"
+
+[[expt.combo]]
+id = 3
+transcribe = "deepseek/deepseek-flash#high"    # let deepseek transcribe
+verify = "mimo/mimo-v2.6-pro"
+```
+
+Every gateway used here is already declared; only add `[[expt.provider]]` for a new one.
+
+**Step 2: set the benchmark pages** (all combos run the same pages, or the comparison is
+meaningless):
+
+```toml
+[expt]
+pages = "220-224,507-511"   # a few representative pages: dense formulas + sparse
+```
+
+**Step 3: run one experiment round** (this spends money; 20 pages × 3 combos — estimate with
+the price table below):
+
+```bash
+pdfoenix -C books/my_book expt run --combo 1 2 3 -m "first pricing pass"
+```
+
+This creates batch 1 and runs one cell per combo: transcribe the benchmark pages → the
+combo's own judge verifies → cost and correction rates are recorded. Rerunning the same
+command resumes after an interruption; only `--force` redoes work.
+
+**Step 4: read the results**:
+
+```bash
+pdfoenix -C books/my_book expt show --batch 1    # corrections/100p and cost per combo
+pdfoenix -C books/my_book report quality         # cross-batch comparison + expt/report.md
+```
+
+**Step 5: adopt the winner.** If combo 2 is cheaper and just as good, make it the production
+combo:
+
+```toml
+[expt]
+active = 2
+```
+
+Plain `transcribe` / `verify` will use it from then on. Old batches stay reviewable forever —
+combos are immutable, and every ledger call remembers its combo.
 
 ## Configuration
 
-Each book has a single `config.toml`. Only override values that differ from the defaults; the rest
-is filled in from `presets/config.schema.toml`.
+Each book has one `config.toml` that **only lists values that differ from the defaults**;
+missing keys are filled from the built-in defaults. The complete reference of keys and defaults
+lives in `presets/config.schema.toml` (copied into each book by `init` and always in sync with
+the built-in defaults). `init` also writes diffs only — the file never balloons into a full
+snapshot.
 
 ```toml
 [book]
@@ -222,136 +414,241 @@ render_dpi = 150
 verify_dpi = 300
 verify_chunk_size = 5
 
+[transcriber]
+timeout = 3600            # per-call timeout in seconds
+
 [expt]
 pages = "220-224,507-511"     # benchmark pages shared by every combo
-active = 1                    # combo driving plain transcribe/verify
+active = 1                    # the combo behind plain transcribe/verify
+max_workers = 2               # concurrent windows per combo
+attempts = 4                  # retries per window
 
-[[expt.provider]]
+[[expt.provider]]             # gateway connection; keys never hit disk, export them
 name = "mimo"
 base_url = "https://api.xiaomimimo.com/v1"
-api_key_env = "MIMO_API_KEY"  # keys are never stored; export them
+api_key_env = "MIMO_API_KEY"
 
-# default combo: quality winner of our benchmark (shipped with the defaults)
+[[expt.provider]]
+name = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+
+# Default combo: the benchmark's value sweet spot (shipped, no need to write it)
 [[expt.combo]]
-id = 1                        # combos are immutable; create a new id to change
-transcribe = "mimo/mimo-v2.6-pro-ultraspeed"
-verify = "mimo/mimo-v2.6-pro" # must differ from transcribe
+id = 1                        # combos are immutable; create a new id to change one
+transcribe = "mimo/mimo-v2.6-pro"
+verify = "deepseek/deepseek-flash#high"   # must differ from transcribe
 
 [sampling]
 page_risk = "max"
-budget = "20%"           # hard ceiling; target probability is about 10%
+budget = "20%"           # hard ceiling; the probability target is ~10%
 low_max = 50
 high_min = 125
 low_prob = 0.01
 medium_prob = 0.09
 high_prob = 0.60
-min_pages = 10           # absolute floor for formula-sparse books
-min_rate = 0.10          # at least 10% of candidate pages
+min_pages = 10           # absolute floor even for formula-sparse books
+min_rate = 0.10          # relative floor: at least 10% of candidate pages
 seed = 0
+
+[review]
+global_audit = true      # run the global audit after verify (dry mode)
 ```
 
-### Combos: the models behind the two agents
+### Combos: the model pair behind the two agents
 
-A **combo** is the model pair behind the two billed agents: `transcribe` writes the
-Markdown, `verify` (the judge) audits it.  Combos live in `config.toml` and are
-**immutable** — to change a pair, create a new combo id, so historical experiment
-records stay interpretable.  Adding combos is done only through init:
+A **combo** is the model pair of the two billed agents: `transcribe` writes Markdown, `verify`
+(the judge) reviews it. Combos live in `config.toml` and are **immutable** — create a new id to
+change one, so historical experiment records stay interpretable. **Adding a combo is plain
+configuration** (no wizard, no preset model catalog — people tuning model pairs know what they
+want):
 
-```bash
-pdfoenix init books/my_book --combo 2 4   # adopt existing ids, create missing ones
+```toml
+# config.toml
+[[expt.provider]]         # only for a new gateway; skip if already declared
+name = "deepseek"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[[expt.combo]]
+id = 2                    # a new id; never edit old ones
+transcribe = "deepseek/deepseek-flash#high"
+verify = "mimo/mimo-v2.6-pro"   # must differ from transcribe
 ```
 
-Missing ids open an interactive wizard (Tab/Enter picks from `presets/providers.toml`;
-**API keys are never asked** — export the provider's `api_key_env` instead).  A combo
-spec is `provider/model#thinking`; `verify` must differ from `transcribe` (a judge
-never reviews its own output).  The adapter passes the spec to the corresponding
-agent as `opencode run --model provider/model#variant`; connection details
-(`base_url`, key env var) come from `[[expt.provider]]` and are materialized into a
-generated `working/opencode.jsonc` — users never edit that file.
+Three rules:
 
-`thinking = "default"` (or empty) means no variant suffix. Any other value becomes `#<value>`
-and is passed to the gateway as an explicit variant, including `thinking = "none"` for gateways
-that expose `none` as a real variant (DeepSeek: `deepseek/deepseek-v4-pro#none`).
-For example, `thinking = "high"` produces `mimo/mimo-v2.6-pro#high`.
+- Specs are written `provider/model#thinking`; `verify` must differ from `transcribe`
+  (a judge never reviews its own output);
+- `[[expt.provider]]` declares the gateway connection: `base_url` plus the name of the key's
+  environment variable (**keys never hit disk**; just export them);
+- `active` points at the combo behind plain `transcribe` / `verify`.
 
-> The available variants depend on the model and gateway. The current MiMo gateway only accepts
-> `default`; `high` / `low` / `medium` / `max` return `Variant unavailable`.
+The adapter turns a combo into `opencode run --model provider/model#variant`;
+`working/opencode.jsonc` is generated at runtime (with the tool-free agent skeleton) and never
+edited.
 
-### Combo reference prices (USD per 10 pages)
+`thinking = "default"` (or empty) attaches no variant; any other value becomes `#<value>` and
+is passed to the gateway as an explicit effort level. Which levels exist is up to the model and
+gateway:
 
-Measured on a math-heavy scanned book: 20 pages across four difficulty windows,
-full transcription + full review including retry waste, scaled to 10 pages:
+- The **MiMo** gateway accepts `default` only; `#high` / `#low` / `#max` yield
+  `Variant unavailable`;
+- **DeepSeek**'s `#low` / `#high` / `#max` map to `reasoning_effort` (default `high`);
+  `#none` turns thinking off (quality drops sharply, see the table below);
+- `deepseek-flash` (now V4.1 Flash) takes image input and can transcribe or verify;
+  `deepseek-v4-pro` is text-only and cannot look at scans (it refuses the call).
 
-| combo (transcribe × verify)                              | err/100p | $/10pp | role         |
-|----------------------------------------------------------|---------:|-------:|--------------|
-| **mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro** (default)   |  **55**  |  0.68  | best quality |
-| mimo-v2.6-pro × deepseek-flash#high                      |   50–65  |  0.13  | cost/quality |
-| deepseek-flash#high × mimo-v2.6-pro                      |    85    |  0.12  | cheapest ok  |
-| mimo-v2.6-flash × mimo-v2.6-pro                          |   190    |  0.11  | avoid        |
-| deepseek-flash#none × mimo-v2.6-pro                      |   250    |  0.13  | avoid        |
+### Combo reference prices (USD / 10 pages)
 
-Combo 1 (the quality winner) ships with the default configuration: `init`, then
-`export MIMO_API_KEY`, and you are ready.  Thinking matters: deepseek-flash
-`#none` → `#high` moves 250 → 85 err/100p for +$0.02/10pp.  `deepseek-v4-pro`
-has no image input and refuses these tasks at every thinking level.  Prices
-scale with formula density; with ~10% sampled review in production the book
-cost is roughly transcription + 10% × review, 30–40% below the table.
+Measured on a statistics scan, 20 pages × 4 difficulty windows (dense formulas / medium / sparse
+/ prose), full transcription + full verification including retry overhead, normalized to 10
+pages:
 
-The risk bands come from calibration: page risk `≤50 / 51–125 / >125` maps to sampling
-probabilities `1% / 9% / 60%`, about 10% of pages on average. `budget` is only a hard ceiling.
+| Combo (transcribe × verify)                              | Corrections/100p | USD/10p | Positioning |
+|----------------------------------------------------------|-----------------:|--------:|-------------|
+| mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro                 |       **55**     |  0.68   | best quality |
+| **mimo-v2.6-pro × deepseek-flash#high** (default)        |       50–65      |  0.13   | value sweet spot |
+| deepseek-flash#high × mimo-v2.6-pro                      |         85       |  0.12   | cost first |
+| mimo-v2.6-flash × mimo-v2.6-pro                          |        190       |  0.11   | not recommended |
+| deepseek-flash#none × mimo-v2.6-pro                      |        250       |  0.13   | not recommended |
 
-Sampling has a floor and a ceiling. First pages are drawn by risk probability. If the result is
-below `max(min_pages, ceil(min_rate × candidate_pages))`, uniformly random remaining pages are
-added until the floor is reached. If the book has fewer candidate pages than the floor, every page
-is sampled. This prevents formula-sparse books from being almost entirely skipped.
+- The default combo (row 2, the value sweet spot) ships with the defaults: `init`, then
+  `export MIMO_API_KEY` and `export DEEPSEEK_API_KEY` and go; for maximum quality create a
+  combo from row 1;
+- Thinking levels matter a lot: deepseek-flash `#none` → `#high` moves the error rate 250 → 85
+  for +$0.02/10 pages — thinking is worth enabling;
+- `deepseek-v4-pro` cannot take image input (it refuses the call) at any thinking level;
+- Prices scale with formula density; the table is the **full-verification** picture. In
+  production, with ~10% risk-sampled verification, total cost ≈ transcribe + 10% × verify,
+  another 30–40% below the table.
+
+### Sampling
+
+Risk bands come from calibration: page risk `≤50 / 51–125 / >125` maps to sampling probabilities
+`1% / 9% / 60%`, targeting ~10% of pages in expectation; `budget` is only a hard ceiling. The
+risk score is pure string analysis (weighted counts of sub/superscripts, fractions, accents,
+bold fonts, matrices, big operators); weights live in `[sampling.risk_weights]`, and
+`report risk` shows the measured distribution for recalibration.
+
+Sampling has a "floor + ceiling": pages are drawn by risk probability first; if fewer than
+`max(min_pages, ceil(min_rate × candidate pages))` were drawn, random pages fill the gap; if
+fewer candidates exist than the floor, all are taken. Formula-sparse books therefore never end
+up almost unsampled.
 
 ## Cost and quality
 
-```bash
-pdfoenix -C books/my_book report --by model     # tokens / cost by model
-pdfoenix -C books/my_book report --by chapter   # tokens / cost by chapter
+Every model call is booked into `logs/pipeline.db` (production) or `expt/experiments.db`
+(experiments): model, thinking level, combo, batch, input/vision/output tokens, latency, status.
+You can always answer "what did this book cost, and where did it go":
 
-pdfoenix -C books/my_book expt                  # batch × combo overview (display)
-pdfoenix -C books/my_book expt --combo 2 4 --run -m "after prompt v2"   # new batch
-pdfoenix -C books/my_book expt --batch 1 --run  # resume batch 1's unfinished cells
-pdfoenix -C books/my_book expt --report         # comparison + expt/report.md
-pdfoenix -C books/my_book watch                 # live dashboard
+```bash
+pdfoenix -C books/my_book report cost --by model     # tokens / cost by model
+pdfoenix -C books/my_book report cost --by chapter   # tokens / cost by chapter
+pdfoenix -C books/my_book report quality             # cost-quality comparison + expt/report.md
+pdfoenix -C books/my_book report risk                # risk distribution (for calibration)
 ```
 
-Nothing spends without `--run`; every other `expt` invocation is display.  A batch is one
-comparison round over a set of combos (`expt/batch_N/combo_M/`); with `--batch` and `--combo`,
-`--run` replaces the batch's combo set and fills its gaps.  Finished cells are skipped unless
-`--force`, and the ledger only ever grows.
+Experiment quality is judged by each combo's own `verify` agent: corrections per 100 reviewed
+pages, plus coverage and structural defects (wrong page anchors, tool-markup leaks).
 
-Every model call is recorded in `logs/pipeline.db` (production) or `expt/experiments.db`
-(experiments): model, thinking level, combo, batch, input/vision/output tokens, latency,
-and status.  Experiment quality is judged by the combo's own `verify` model: corrections
-per 100 verified pages, reported next to coverage and structural defects (bad page
-anchors, leaked tool-call markup).
+> `cost_usd` is computed from `presets/pricing.toml` unit prices; models without a configured
+> price show 0, but token counts are always real.
 
-> `cost_usd` is computed from the prices in `presets/pricing.toml`. A model without a configured
-> price shows 0, but token counts are always recorded.
+## FAQ
+
+**My PDF has no text layer. What now?**
+`scout` needs the text layer to map the structure. OCR pure image scans first:
+
+```bash
+ocrmypdf input.pdf output.pdf
+```
+
+**A run was interrupted. What now?**
+Just rerun the same command. Every stage skips the parts already done and continues; to redo a
+step from scratch, add `--force` to that command.
+
+**`check` reports "dangling anchors", but those chapters aren't transcribed yet.**
+That is expected: cross-references point at chapters you haven't reached. Put those anchor ids
+into `known_dangling.txt` in the book directory (one per line) and `check` will accept them.
+
+**I get `Variant unavailable`.**
+You asked for a thinking level the gateway does not offer (e.g. `#high` on MiMo). Set
+`thinking = "default"` or use a gateway that supports the level; see
+[Combos](#combos-the-model-pair-behind-the-two-agents).
+
+**What will a whole book cost?**
+See [Combo reference prices](#combo-reference-prices-usd--10-pages). In production, total cost
+≈ transcribe + ~10% verify. To see what you have already spent, run `report cost` any time.
+
+**I want stronger or cheaper models.**
+Do not edit an existing combo (it is immutable so history stays comparable); add a new id in
+`config.toml` and measure it on your own book with `expt` first — full walkthrough in
+[Hands-on: pick a combo that pays off](#hands-on-pick-a-combo-that-pays-off):
+
+```toml
+[[expt.combo]]
+id = 2
+transcribe = "mimo/mimo-v2.6-pro-ultraspeed"
+verify = "mimo/mimo-v2.6-pro"
+```
+
+**Are API keys safe?**
+Keys travel through environment variables only (`[[expt.provider]].api_key_env`) and never
+touch any file; the whole `books/` directory is in `.gitignore` as well.
+
+## Live dashboard
+
+`pdfoenix watch` is **read-only**: it never starts or advances the pipeline. It reads
+`state/progress.json` and `logs/pipeline.db`, so run it alongside the commands that write those
+files:
+
+```bash
+# Terminal 1: run the pipeline
+pdfoenix -C books/my_book transcribe
+
+# Terminal 2: watch at the same time
+pdfoenix -C books/my_book watch
+
+# Single frame
+pdfoenix -C books/my_book watch --once
+
+# Refresh interval (seconds)
+pdfoenix -C books/my_book watch --interval 2
+```
+
+For live progress use two terminals; `pdfoenix transcribe && pdfoenix watch` works too, but
+`watch` only starts **after** transcribe finishes. Press `Ctrl-C` to exit. Without `rich`
+installed the dashboard falls back to plain-text frames.
 
 ## Project structure
 
 ```text
 pdfoenix/          # package source
-├── core/          # deterministic kernel (no LLM)
+├── core/          # deterministic kernel (no LLM): book/config/state/pages/telemetry/
+│                  #   risk/scout/render/merge/check/build/postprocess
+├── combo.py       # model combos: provider/combo config, active combo, opencode config
+│                  #   generation
+├── pipeline.py    # shared stage operations: render-missing, transcribe windows,
+│                  #   verify images, progress, correction bookkeeping
 ├── transcribe/    # Transcriber protocol + OpenCode adapter
-├── verify/        # sampling, page-content recovery, global audit
+├── verify/        # sampling, page content recovery, global audit
 ├── assets/        # figure cropping, verification page rendering
-├── presets/       # epub.css / opencode.jsonc / task books / pricing / defaults
+├── expt.py        # experiments: batch/cell ledger, runner, metrics, comparison report
+├── report.py      # cost/quality/risk reports
+├── display.py     # table rendering (plain text / Markdown)
+├── inspect.py     # EPUB acceptance checks
+├── watch.py       # dashboard
+├── scaffold.py    # init scaffolding
 ├── cli.py         # command orchestration
-├── report.py      # cost / experiment reports
-├── calibrate.py   # risk distributions
-├── inspect.py     # EPUB inspection
-└── watch.py       # dashboard
+└── presets/       # epub.css / opencode.jsonc (agent-skeleton template) / task books /
+                   #   pricing / config reference
 tests/             # unit and integration tests
 start.sh           # environment setup script
 ```
 
-`books/` is a local data directory (PDFs, manuscripts, page images, logs, build artifacts).
-It is ignored by `.gitignore` and is never committed.
+`books/` is the local data directory (PDFs, manuscripts, page images, logs, build artifacts).
+It is ignored by `.gitignore` and never enters the repository.
 
 ## Development
 
@@ -362,14 +659,14 @@ ruff check pdfoenix tests
 pylint --disable=all --enable=duplicate-code pdfoenix
 ```
 
-Conventions: comments and docstrings are in English; every module has tests; `\tag{}`, bare `■`,
-and unanchored headings are forbidden.
+Conventions: comments and docstrings in English; every module ships with tests; `\tag{}`, bare
+`■`, and anchor-less headings are forbidden.
 
 ## Design
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for page anchors, the object model, verification sampling,
-the cost ledger, and the configuration schema.
+The full design of page anchors, the object model, verification sampling, the cost ledger, and
+the configuration schema is documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
-TBD
+(TBD)

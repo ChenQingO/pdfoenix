@@ -3,6 +3,8 @@
 > pdfoenix（PDF Phoenix）= 通用「扫描版 PDF → 现代 EPUB」流水线。
 > 本文档是**实施蓝图**：所有设计决策的权威记录，后续代码实现以本文档为准。
 > 状态：v0.2 实施完成（2026-10-22）：内核、模型、资产、复核、预设、CLI、看板与首轮标定均已落地。
+> v0.3 重构完成（2026-10-24）：命令面分组统一（流水线 / 报告 / 实验），
+> `expt.py` 拆出 `combo.py`（模型组合）与 `pipeline.py`（共享编排），死代码与废配置清除。
 
 ---
 
@@ -31,14 +33,20 @@
 pdfoenix/                       # 源代码区（包）
 ├── cli.py                      # 编排器：子命令、控制流、断点续跑（见 §5）
 ├── scaffold.py                 # init 脚手架（目录/配置/预设/空注册表）
-├── report.py                   # 成本汇总 + 成本-质量实验表
-├── calibrate.py                # 风险分/页风险分布报告（只读）
+├── combo.py                    # 模型组合：provider/combo 配置、active combo、
+│                               #   working/opencode.jsonc 生成（组合在 config.toml 手写）
+├── pipeline.py                 # 共享编排原语：渲染补缺、转写窗口、复核页图、
+│                               #   进度单元、纠错落账（CLI 与 expt 共用）
+├── report.py                   # 成本汇总 + 成本-质量对比 + 风险分布报告
+├── expt.py                     # 实验：批次/格子账本（experiments.db）、跑批、指标
+├── display.py                  # 表格渲染（纯文本 / Markdown，唯一实现）
 ├── inspect.py                  # EPUB 结构验收检查
 ├── core/                       # 确定性内核（无 LLM）
-│   ├── book.py                 #   书上下文：路径、章/批次/节枚举、自然排序
-│   ├── config.py               #   配置：默认值 + config.toml 深合并 + 校验
+│   ├── book.py                 #   书上下文：路径、章/批次/节枚举、章页范围、自然排序
+│   ├── config.py               #   配置：默认值 + config.toml 深合并 + 校验 + 差异写回
 │   ├── state.py                #   state/ JSON 注册表原子读写 + schema 校验
-│   ├── telemetry.py            #   SQLite 成本账本 + 人类日志
+│   ├── pages.py                #   页选择/批次规划/页锚点与命名约定（唯一来源）
+│   ├── telemetry.py            #   SQLite 成本账本
 │   ├── risk.py                 #   复杂度风险分（纯字符串分析）
 │   ├── scout.py                #   侦察：章/节/图/表/公式结构 → state/scout.json
 │   ├── render.py               #   页渲染（整页/区域）→ working/pages/
@@ -47,7 +55,7 @@ pdfoenix/                       # 源代码区（包）
 │   ├── build.py                #   拼装（目录/表内联）→ pandoc → EPUB
 │   └── postprocess.py          #   EPUB 后处理（脚注章末化、nav 移出 spine）
 ├── transcribe/                 # 模型层（唯二含 LLM 的地方之一）
-│   ├── protocol.py             #   Transcriber / Verifier 协议（见 §8）
+│   ├── protocol.py             #   Transcriber / Verifier 协议 + 输出契约（见 §8）
 │   └── opencode.py             #   OpenCodeTranscriber（npx 本地，见 §8）
 ├── verify/                     # 复核层（抽样/审计；LLM 调用经 Transcriber.verify）
 │   ├── sampling.py             #   分布驱动抽样策略（可插拔）
@@ -57,11 +65,11 @@ pdfoenix/                       # 源代码区（包）
 │   └── crop.py                 #   图裁图；抽样页按需 300 dpi 重渲染
 ├── presets/                    # 预设层（版本化，见 §13）
 │   ├── epub.css                #   默认样式（基于现有 styles/epub.css）
-│   ├── opencode.jsonc          #   opencode 默认模型/agent/思考档
+│   ├── opencode.jsonc          #   agent 骨架模板（内部；生成 working/opencode.jsonc 用）
 │   ├── transcribe.md           #   转写任务书模板
 │   ├── verify.md               #   复核任务书模板
 │   ├── pricing.toml            #   模型单价表
-│   └── config.schema.toml      #   config.toml 默认值
+│   └── config.schema.toml      #   全量配置参考（与 DEFAULT_CONFIG 由测试保持同步）
 └── watch.py                    # 实时看板（rich TUI，只读，见 §11）
 ```
 
@@ -84,7 +92,7 @@ BooksProject/
 
 ```
 <book>/
-├── config.toml                 # 该书配置（覆盖预设，见 §12）
+├── config.toml                 # 该书配置（只写与默认值不同的项，见 §12）
 ├── presets/                    # init 复制的预设（opencode/任务书/单价/css）
 ├── known_dangling.txt          # check 的合法悬空锚点白名单
 ├── styles/epub.css             # 构建样式（从 presets/epub.css 复制）
@@ -98,41 +106,56 @@ BooksProject/
 ├── working/                    # 过程文件（可再生）
 │   ├── pages/                  #   整页渲染 150 dpi（唯一一份；公式/表页参考图也在这）
 │   ├── verify/                 #   复核抽样页的 300 dpi 重渲染（临时）
-│   ├── zoom/                   #   人工放大复核裁图（on-demand）
-│   └── batches/chNN/           #   转写批次 pXXX-YYY.md + TASK.md
+│   ├── batches/chNN/           #   转写批次 pXXX-YYY.md + TASK.md
+│   └── opencode.jsonc          #   生成的适配器配置（生成物，勿手改）
 ├── state/                      # ★ 元数据/注册表/决策（纯文本，见 §6/§7）
 │   ├── scout.json
 │   ├── formulas.json  figures.json  tables.json
 │   ├── corrections.json
 │   └── progress.json
+├── expt/                       # 实验区（可再生）
+│   ├── experiments.db          #   实验账本（batch/cell/metrics）
+│   ├── report.md               #   report quality 生成的对比报告
+│   └── batch_N/combo_M/        #   格子产物：batches/ progress.json logs/run.log
 ├── logs/
-│   ├── pipeline.log            #   人类可读（按日滚动）
 │   └── pipeline.db             #   ★ 成本账本（SQLite，见 §10）
 └── build/                      # 构建产物：book.md、*.epub
 ```
 
 ## 5. 流水线阶段（CLI 子命令）
 
+命令面分三组，四条统一规则（作用域 `--chapter/--pages`、幂等与 `--force`、
+输出 `--out`/位置参数、退出码 0/1/2）详见 README「命令手册」。
+
 ```
-pdfoenix init <book> --pdf a.pdf          # 脚手架 + config + 预设
+# 流水线（按执行顺序，每个命令独立可跑、幂等）
+pdfoenix init <book> --pdf a.pdf [--combo ID ...]   # 脚手架 + config + 预设
 pdfoenix scout                            # 侦察 → state/scout.json
-pdfoenix render                           # 页渲染 150 dpi → working/pages/
-pdfoenix transcribe                       # 分页批转写（页锚点，见 §7）
-pdfoenix merge                            # 合并 + 注册（见 §6/§7）
-pdfoenix verify                           # 抽样复核（一阶段页抽样，见 §9）
-pdfoenix assets                           # 图裁图；复核页 300 dpi 重渲染
+pdfoenix render [--pages SPEC]            # 页渲染 150 dpi → working/pages/（可选）
+pdfoenix transcribe [--chapter|--pages]   # 分页批转写（页锚点，见 §7）
+pdfoenix merge [--chapter]                # 合并 + 注册（见 §6/§7）
+pdfoenix verify [--chapter|--pages|--full] [--audit off|dry|apply]
+pdfoenix assets [--force] [--no-auto]     # 图裁图；复核页 300 dpi 重渲染
 pdfoenix check                            # 自动校验
-pdfoenix build                            # pandoc → EPUB + 后处理
-pdfoenix inspect                          # EPUB 验收抽查
-pdfoenix watch                            # 实时看板（只读）
-pdfoenix report [--by model|chapter]      # 成本汇总
-pdfoenix experiment --by model --metric cost,error_rate   # 成本-质量对比
-pdfoenix calibrate                        # 风险分/页风险分布报告（只读）
+pdfoenix build [--out book.epub]          # pandoc → EPUB + 后处理
+pdfoenix inspect [EPUB]                   # EPUB 验收抽查
+
+# 状态（只读）
+pdfoenix watch [--interval SEC] [--once]  # 实时看板
+
+# 报告（只读）
+pdfoenix report cost [--by model|chapter] # 成本汇总
+pdfoenix report quality [--all]           # 成本-质量对比 + expt/report.md
+pdfoenix report risk                      # 公式/页风险分布（标定用）
+
+# 实验（只有 run 花钱）
+pdfoenix expt show [--batch N] [--combo ID ...] [--all]
+pdfoenix expt run  [--batch N] [--combo ID ...] [--all] [-m 备注] [--force]
 ```
 
 **编排器（cli.py）**：普通确定性 Python 主程序——读 `state/progress.json` 判断「做到哪了」，只做没做的单元；调确定性脚本直接调，LLM 那两处经 `Transcriber` 接口**阻塞调用** opencode；每一步结果落盘。真相与顺序在编排器 + 文件里，opencode 只是被按批召唤的执行体，适配器内部负责并行 fan-out。
-
-每个子命令独立可跑、幂等：`transcribe` 跳过已完成批次；`verify` 跳过已核页；`build` 任何时候可重跑。
+共享的单元操作（渲染补缺、转写窗口、复核页图、进度、纠错落账）在 `pipeline.py`，
+CLI 与实验跑批共用，两个编排器因此不会漂移。
 
 ## 6. 对象模型：图 / 表 / 公式
 
@@ -208,7 +231,9 @@ class Correction:
 - 单次（one-shot）headless 调用：一个 prompt 进、一个结果出，无多轮对话；批量 fan-out 在适配器内部并行。
 - `transcribe` 默认批大小 4–6 页/次；`verify` 默认 chunk_size ≈ 5 页/次（见 §9）。
 - 调用可失败（额度/超时）：编排器按单元重试，状态落盘。
-- 模型/思考档来自 `config.toml [models]`，路由规则见 §12。
+- 模型/思考档由 active combo 决定（`combo.py` 的 `pipeline_config` 从
+  `[[expt.combo]]` 生成适配器的 `[models]`），`config.toml` 是用户唯一配置文件，
+  `working/opencode.jsonc` 为生成物。
 
 ## 9. 复核（verify）：一阶段页抽样 + 对抗式 + 全局审计
 
@@ -253,19 +278,21 @@ risk = 2×(_ ^ 计数) + 3×(\frac \sqrt) + 3×(\hat \bar \tilde)
 
 ## 10. 日志与成本账本（成本-质量实验的基础设施）
 
-`logs/pipeline.log`（人类可读，按日滚动）+ `logs/pipeline.db`（SQLite 结构化账本，跨 run 累积、append-only）。
+`logs/pipeline.db`（SQLite 结构化账本，跨 run 累积、append-only）；同库的 `events`
+表就是人类可读的运行轨迹（`watch` 与断点调试直接读它）。
 
 **llm_calls**（每次调用一行；token 分开记，vision/text 单价不同；存 token 不存钱）：
 
 ```sql
 CREATE TABLE llm_calls (
-  call_id TEXT PRIMARY KEY, run_id TEXT, experiment_id TEXT,
+  call_id TEXT PRIMARY KEY, run_id TEXT,
+  combo_id TEXT, batch_no INTEGER,
   stage TEXT,            -- transcribe | verify | ...
   role TEXT,             -- 转写 | 复核（对抗角色）
   model TEXT, provider TEXT, thinking_mode TEXT, prompt_version TEXT,
   unit_id TEXT, n_images INTEGER,
   input_text_tokens INTEGER, input_vision_tokens INTEGER, output_tokens INTEGER,
-  latency_ms INTEGER, status TEXT, retry_of TEXT, error TEXT, ts TEXT
+  latency_ms INTEGER, status TEXT, error TEXT, ts TEXT
 );
 ```
 
@@ -280,7 +307,7 @@ CREATE TABLE corrections (
 
 **事件流**（同库追加，供 watch 与断点调试）：`run` 元信息、`unit:stage:start/ok/fail/retry`、`dispatch`/`agent_start`/`agent_done`（fan-out 与子代理状态）、确定性阶段结论（check 缺口/merge 接缝/build 警告）。
 
-原则：不记密钥；LLM 完整 I/O **默认只记路径**（`log_verbose` 开关才落全文）；成本在 `report` 时由 `pricing.toml` 单价 × token 计算（价格变动不污染历史）。
+原则：不记密钥；LLM 完整 I/O 不落盘（只记 token/耗时/状态）；成本在 `report` 时由 `pricing.toml` 单价 × token 计算（价格变动不污染历史）。
 
 ```toml
 # presets/pricing.toml（单位：美元 / 1M token）
@@ -310,6 +337,9 @@ rich TUI 实时看板，**只读视图**（tail `pipeline.db` + `state/progress.
 
 ## 12. config.toml schema
 
+`config.toml` **只写与默认值不同的项**（`core/config.py` 的 `diff_config` 保证写回也只写差异）；
+全量键与默认值的参考是 `presets/config.schema.toml`，由测试与 `DEFAULT_CONFIG` 严格同步。
+
 ```toml
 [book]
 title = "An Introduction to Multivariate Statistical Analysis"
@@ -324,13 +354,7 @@ verify_dpi = 300
 verify_chunk_size = 5           # 一次 verify 会话查几页
 
 [transcriber]
-provider = "opencode"           # 多态入口：自实现类可替换
-opencode_config = "presets/opencode.jsonc"
-
-[models]                        # 任务 → 模型/思考档路由（默认，可标定）
-[models.transcribe]  model = "..." ; thinking = "high"
-[models.verify]      model = "..." ; thinking = "high"    # 必须 ≠ transcribe 模型
-[models.classify]    model = "..." ; thinking = "low"     # 预留：图分类/表格结构
+timeout = 3600                  # 单次模型调用超时（秒）
 
 [sampling]
 strategy = "risk_distribution"  # 可插拔
@@ -347,23 +371,30 @@ min_rate = 0.10                 # 相对下限（至少抽候选页的 10%）
 seed = 0                        # 确定性抽样
 
 [review]
-global_audit = true
+global_audit = true             # verify 后跑全局审计（dry 模式）
 
-[logging]
-level = "info"
-verbose = false                 # 开则落 LLM 全文 I/O
+[expt]                          # 模型组合 + 实验跑批（见 §8/§5）
+pages = "220-224,507-511"
+max_workers = 2
+attempts = 4
+active = 1
+[[expt.provider]]  name / base_url / api_key_env   # 网关连接，key 只走环境变量
+[[expt.combo]]     id / transcribe / verify        # 不可变的模型对，手写添加
 ```
+
+适配器所需的 `[models]` 与 `working/opencode.jsonc` 均为**生成物**（由 `combo.py`
+从组合与 provider 生成），不进 `config.toml`——用户只改一个文件。
 
 ## 13. 预设（presets/，版本化）
 
 | 预设                 | 内容                                                                                                                                         |
 |----------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | `epub.css`           | 现代出版商默认样式（以现有 styles/epub.css 为基准）：90% 字号、1.35 行距、链接色、章末 Notes、悬挂缩进参考文献、figure/table/blockquote 样式 |
-| `opencode.jsonc`     | 模型/agent/思考档默认（transcribe 与 verify 不同模型）                                                                                       |
+| `opencode.jsonc`     | agent 骨架模板（内部）：生成 `working/opencode.jsonc` 用，用户无需编辑                                                                       |
 | `transcribe.md`      | 转写任务书：页锚点 `<!-- page:N -->`、图/表占位格式、公式 LaTeX 规则、记号角色制、残缺三分法、脚注/证毕/引用规范                             |
 | `verify.md`          | 复核任务书：只核清单、输出结构化 Correction                                                                                                  |
 | `pricing.toml`       | 模型单价表                                                                                                                                   |
-| `config.schema.toml` | config 默认值                                                                                                                                |
+| `config.schema.toml` | 全量配置参考（与 `DEFAULT_CONFIG` 由测试保持同步）                                                                                           |
 
 ## 14. 格式与构建规范（自现有项目移植并泛化）
 
@@ -406,13 +437,25 @@ verbose = false                 # 开则落 LLM 全文 I/O
    - 抽样下限：`min_pages=10`、`min_rate=10%`；风险抽样不足时从剩余页随机补齐，
      候选页少于下限则全抽，避免公式稀疏的书被几乎跳过。
 6. [x] **预设与脚手架**（2026-10-22）：`presets/` 全套（epub.css、opencode.jsonc、
-   transcribe.md、verify.md、pricing.toml、config.schema.toml）；`scaffold.py` + `init`；
-   `cli.py` 全部子命令（init/scout/render/transcribe/merge/verify/assets/check/build/
-   inspect/watch/report/experiment/calibrate）+ `python -m pdfoenix`；`watch.py` 只读看板
-   （rich 可用时表格，否则纯文本）。
+   providers.toml、transcribe.md、verify.md、pricing.toml、config.schema.toml）；
+   `scaffold.py` + `init`；`cli.py` 全部子命令 + `python -m pdfoenix`；
+   `watch.py` 只读看板（rich 可用时表格，否则纯文本）。
 7. [x] **标定阶段**（首轮，2026-10-22）：1531 条公式与页风险分布已测定，阈值/抽样概率/
-   硬预算已写入默认配置；`calibrate` 可随时重算分布。模型路由与 `chunk_size` 属于运行期
-   调参，待真实全量转写/复核数据后按 `report`/`experiment` 微调，不阻塞架构。
+   硬预算已写入默认配置；`report risk` 可随时重算分布。模型路由与 `chunk_size` 属于运行期
+   调参，待真实全量转写/复核数据后按 `report` 微调，不阻塞架构。
+8. [x] **整合重构**（v0.3，2026-10-24）：命令面分组统一（流水线 / `report cost|quality|risk` /
+   `expt show|run`），四条统一规则（作用域、幂等与 `--force`、输出参数、退出码）成文并有
+   参数面测试；`expt.py` 拆出 `combo.py`（模型组合）与 `pipeline.py`（共享编排）；
+   页锚点/批次命名/章页范围/成本汇总等 21 处重复逻辑收口到单一实现；
+   死代码（`MergeOverrides`、`calibrate` 命令、零调用函数）与废配置
+   （`models.classify`、`transcriber.provider`、`logging.*`）清除，
+   `config.toml` 改为只写差异；README 扩写为命令手册（中英同步）。
+9. [x] **配置单一化**（v0.3.1，2026-10-24）：`config.toml` 成为用户唯一配置文件——
+   opencode 配置并入（`working/opencode.jsonc` 由 `[[expt.provider]]` + 模板生成，
+   `presets/opencode.jsonc` 降为内部骨架模板）；组合改为手写 `[[expt.combo]]`
+   （向导与 `providers.toml` 模型库移除）；默认组合改为实测性价比拐点
+   （`mimo/mimo-v2.6-pro × deepseek/deepseek-flash#high`），网关为官方地址；
+   README 补「expt 实战：挑一个划算的组合」完整走查。
 
 ## 16. 开发约定
 
