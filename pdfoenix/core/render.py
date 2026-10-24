@@ -1,9 +1,9 @@
 """Page rendering primitives built on PyMuPDF.
 
-The same primitive is reused by three callers: transcription (150 dpi full
-pages), verification (300 dpi full pages) and manual zoom checks (high-DPI
-region crops).  Rendering is fully local and deterministic; it never calls a
-model.
+Two callers share these primitives: the pipeline stages render full pages
+(transcription at 150 dpi, verification at 300 dpi) and figure cropping renders
+high-DPI regions from an open document.  Rendering is fully local and
+deterministic; it never calls a model.
 """
 from pathlib import Path
 
@@ -18,19 +18,6 @@ def _check_page(doc, page_no: int) -> None:
     if not (1 <= page_no <= doc.page_count):
         raise RenderError(
             f"page {page_no} out of range (1..{doc.page_count})")
-
-
-def render_page(pdf, page_no: int, dpi: int, out_path) -> Path:
-    """Render one full page (1-based ``page_no``) and return the output path."""
-    doc = fitz.open(Path(pdf))
-    try:
-        _check_page(doc, page_no)
-        out_path = Path(out_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        doc[page_no - 1].get_pixmap(dpi=dpi).save(str(out_path))
-        return out_path
-    finally:
-        doc.close()
 
 
 def render_pages(pdf, pages, dpi: int, out_dir) -> list[Path]:
@@ -69,12 +56,3 @@ def render_region_from_doc(doc, page_no: int, box, dpi: int, out_path) -> Path:
     page.get_pixmap(
         matrix=fitz.Matrix(dpi / 72, dpi / 72), clip=clip).save(str(out_path))
     return out_path
-
-
-def render_region(pdf, page_no: int, box, dpi: int, out_path) -> Path:
-    """Render a sub-region of a page (opens and closes the document)."""
-    doc = fitz.open(Path(pdf))
-    try:
-        return render_region_from_doc(doc, page_no, box, dpi, out_path)
-    finally:
-        doc.close()

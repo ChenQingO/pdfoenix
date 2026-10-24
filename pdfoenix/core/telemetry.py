@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS llm_calls (
   model TEXT, provider TEXT, thinking_mode TEXT, prompt_version TEXT,
   unit_id TEXT, n_images INTEGER,
   input_text_tokens INTEGER, input_vision_tokens INTEGER, output_tokens INTEGER,
-  latency_ms INTEGER, status TEXT, retry_of TEXT, error TEXT, ts TEXT
+  latency_ms INTEGER, status TEXT, error TEXT, ts TEXT
 );
 CREATE TABLE IF NOT EXISTS corrections (
   correction_id TEXT PRIMARY KEY,
@@ -77,7 +77,6 @@ class Telemetry:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = Path(db_path) if db_path is not None else self.logs_dir / "pipeline.db"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.log_path = self.db_path.with_suffix(".log")
         self.run_id = run_id or f"run-{_now()}"
         self.combo_id = str(combo_id) if combo_id is not None else None
         self.batch_no = batch_no
@@ -107,7 +106,7 @@ class Telemetry:
     def record_call(self, *, stage, role, model, provider="", thinking_mode="",
                     prompt_version="", unit_id="", n_images=0,
                     input_text_tokens=0, input_vision_tokens=0, output_tokens=0,
-                    latency_ms=0, status="ok", retry_of=None, error=None,
+                    latency_ms=0, status="ok", error=None,
                     call_id=None, combo_id=None, batch_no=None, ts=None) -> str:
         """Record one LLM call and return its id."""
         identifier = call_id or uuid.uuid4().hex
@@ -115,14 +114,14 @@ class Telemetry:
             "INSERT INTO llm_calls (call_id, run_id, combo_id, batch_no, stage,"
             " role, model, provider, thinking_mode, prompt_version, unit_id,"
             " n_images, input_text_tokens, input_vision_tokens, output_tokens,"
-            " latency_ms, status, retry_of, error, ts) VALUES"
-            " (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " latency_ms, status, error, ts) VALUES"
+            " (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, self.run_id,
              str(combo_id) if combo_id is not None else self.combo_id,
              batch_no if batch_no is not None else self.batch_no,
              stage, role, model, provider, thinking_mode, prompt_version,
              unit_id, n_images, input_text_tokens, input_vision_tokens,
-             output_tokens, latency_ms, status, retry_of, error, ts or _now()),
+             output_tokens, latency_ms, status, error, ts or _now()),
         )
         self._conn.commit()
         return identifier
@@ -149,12 +148,6 @@ class Telemetry:
             (_now(), event_type, json.dumps(payload, ensure_ascii=False)),
         )
         self._conn.commit()
-
-    def log(self, msg: str, level: str = "info") -> None:
-        """Append a human-readable line to ``logs/pipeline.log``."""
-        line = f"{_now()} [{level}] {msg}\n"
-        with open(self.log_path, "a", encoding="utf-8") as handle:
-            handle.write(line)
 
     # ── Reads (used by report / tests) ──────────────────────────────────
     def fetch_calls(self) -> list[sqlite3.Row]:

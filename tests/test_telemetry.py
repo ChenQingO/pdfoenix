@@ -59,14 +59,6 @@ def test_emit_event(tel):
     assert '"workers": 3' in evs[-1]["payload"]
 
 
-def test_human_log(tel):
-    tel.log("starting merge", level="info")
-    tel.log("oops", level="error")
-    text = (tel.book_root / "logs" / "pipeline.log").read_text(encoding="utf-8")
-    assert "starting merge" in text
-    assert "[error] oops" in text
-
-
 def test_persist_across_reopen(tmp_path):
     t = Telemetry(tmp_path, run_id="r")
     t.record_call(stage="verify", role="verify", model="m")

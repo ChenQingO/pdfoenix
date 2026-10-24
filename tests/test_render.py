@@ -4,9 +4,8 @@ import pytest
 
 from pdfoenix.core.render import (
     RenderError,
-    render_page,
     render_pages,
-    render_region,
+    render_region_from_doc,
 )
 
 
@@ -21,26 +20,26 @@ def make_pdf(tmp_path, n_pages=2, width=400, height=500):
     return p
 
 
-def test_render_page_creates_file(tmp_path):
+def test_render_pages_creates_files(tmp_path):
     pdf = make_pdf(tmp_path)
-    out = tmp_path / "out" / "p1.png"
-    got = render_page(pdf, 1, 72, out)
-    assert got == out and out.exists()
+    out = render_pages(pdf, [1], 72, tmp_path / "out")
+    assert [p.name for p in out] == ["pdfpage_001.png"]
+    assert out[0].exists()
 
 
-def test_render_page_dpi_scales_size(tmp_path):
+def test_render_pages_dpi_scales_size(tmp_path):
     pdf = make_pdf(tmp_path)
-    a = render_page(pdf, 1, 72, tmp_path / "a.png")
-    b = render_page(pdf, 1, 144, tmp_path / "b.png")
+    a = render_pages(pdf, [1], 72, tmp_path / "a")[0]
+    b = render_pages(pdf, [1], 144, tmp_path / "b")[0]
     wa = fitz.Pixmap(str(a)).width
     wb = fitz.Pixmap(str(b)).width
     assert abs(wb - 2 * wa) <= 2
 
 
-def test_render_page_out_of_range(tmp_path):
+def test_render_pages_out_of_range(tmp_path):
     pdf = make_pdf(tmp_path, n_pages=1)
     with pytest.raises(RenderError):
-        render_page(pdf, 2, 72, tmp_path / "x.png")
+        render_pages(pdf, [2], 72, tmp_path / "x")
 
 
 def test_render_pages_naming(tmp_path):
@@ -52,8 +51,13 @@ def test_render_pages_naming(tmp_path):
 
 def test_render_region_half_page(tmp_path):
     pdf = make_pdf(tmp_path)
-    full = render_page(pdf, 1, 72, tmp_path / "full.png")
-    half = render_region(pdf, 1, (0, 0, 0.5, 0.5), 72, tmp_path / "half.png")
+    full = render_pages(pdf, [1], 72, tmp_path / "full")[0]
+    doc = fitz.open(pdf)
+    try:
+        half = render_region_from_doc(
+            doc, 1, (0, 0, 0.5, 0.5), 72, tmp_path / "half.png")
+    finally:
+        doc.close()
     wf = fitz.Pixmap(str(full)).width
     wh = fitz.Pixmap(str(half)).width
     assert abs(wh - wf / 2) <= 2

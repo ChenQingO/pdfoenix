@@ -55,13 +55,6 @@ class AuditReport:
     def hit_count(self) -> int:
         return len(self.hits)
 
-    def by_pattern(self) -> dict[str, list[AuditHit]]:
-        """Group hits by their left-hand-side pattern."""
-        grouped: dict[str, list[AuditHit]] = {}
-        for hit in self.hits:
-            grouped.setdefault(hit.pattern, []).append(hit)
-        return grouped
-
 
 def parse_pattern(pattern: str) -> tuple[str, str] | None:
     """Split ``X→Y`` (or ``X->Y``) into ``(X, Y)``; return ``None`` if invalid."""
