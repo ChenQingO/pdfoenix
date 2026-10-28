@@ -130,13 +130,10 @@ BooksProject/
 ```
 # 流水线（按执行顺序，每个命令独立可跑、幂等）
 pdfoenix init <book> --pdf a.pdf [--combo ID ...]   # 脚手架 + config + 预设
-pdfoenix scout                            # 侦察 → state/scout.json
-pdfoenix render [--pages SPEC]            # 页渲染 150 dpi → working/pages/（可选）
-pdfoenix transcribe [--chapter|--pages]   # 分页批转写（页锚点，见 §7）
-pdfoenix merge [--chapter]                # 合并 + 注册（见 §6/§7）
+pdfoenix transcribe [--chapter|--pages]   # 分页批转写（自动侦察/渲染，写盘校验）
+pdfoenix merge [--chapter] [--no-assets|--recrop]  # 合并 + 锚点/链接 + 裁图
 pdfoenix verify [--chapter|--pages|--full] [--audit off|dry|apply]
-pdfoenix assets [--force] [--no-auto]     # 图裁图；复核页 300 dpi 重渲染
-pdfoenix check                            # 自动校验
+pdfoenix check [--all]                    # manuscript 校验；--all 连批次/图/进度
 pdfoenix build [--out book.epub]          # pandoc → EPUB + 后处理
 pdfoenix inspect [EPUB]                   # EPUB 验收抽查
 

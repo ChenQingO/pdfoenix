@@ -52,13 +52,10 @@ It does not aim for a pixel-perfect copy. It aims for:
 ```text
 PDF
  │
- ├─ scout      scan the text layer; find chapters/sections/figures/tables/equations
- ├─ render     render pages to images
- ├─ transcribe vision model transcribes page by page → Markdown + LaTeX
- ├─ merge      merge batches, split into sections, register objects
- ├─ assets     crop figures (optional)
+ ├─ transcribe transcribe page by page (auto caches, write gate)
+ ├─ merge      merge, anchors/links, crop figures
  ├─ verify     another model reviews a sample of pages
- ├─ check      local rule validation
+ ├─ check      local validation (`--all` audits batches/figures/progress)
  ├─ build      pandoc assembles the EPUB
  └─ inspect    check the EPUB structure
 ```
@@ -75,7 +72,7 @@ PDF
 | Node.js + OpenCode               | call vision models       | Node 20+                  |
 | Model gateway                    | transcribe / verify      | any OpenCode provider     |
 
-> The PDF must carry a **text layer** (used by `scout`). For pure image scans, OCR first,
+> The PDF must carry a **text layer** (used to map the chapter structure). For pure image scans, OCR first,
 > e.g. `ocrmypdf input.pdf output.pdf`.
 
 ### One-shot environment setup
@@ -124,18 +121,17 @@ pdfoenix init books/my_book \
   --page-offset 18
 
 # 2. Try one chapter first
-pdfoenix -C books/my_book scout
 pdfoenix -C books/my_book transcribe --chapter ch01
 pdfoenix -C books/my_book merge --chapter ch01
 pdfoenix -C books/my_book verify --chapter ch01 --full
+pdfoenix -C books/my_book check --all
 pdfoenix -C books/my_book build
 
 # 3. Once satisfied, run the whole book
 pdfoenix -C books/my_book transcribe
 pdfoenix -C books/my_book merge
-pdfoenix -C books/my_book assets
 pdfoenix -C books/my_book verify
-pdfoenix -C books/my_book check
+pdfoenix -C books/my_book check --all
 pdfoenix -C books/my_book build
 pdfoenix -C books/my_book inspect
 ```
@@ -174,10 +170,10 @@ cd books/my_book && pdfoenix check     # equivalent
 Scope options do exactly one thing: **restrict the work to the given scope and touch nothing
 outside it**.
 
-| Option          | Meaning                       | Commands                          |
-|-----------------|-------------------------------|-----------------------------------|
-| `--chapter ch09`| only this chapter             | `transcribe`, `merge`, `verify`   |
-| `--pages 19-30,40` | only these pages           | `render`, `transcribe`, `verify`  |
+| Option             | Meaning           | Commands                        |
+|--------------------|-------------------|---------------------------------|
+| `--chapter ch09`   | only this chapter | `transcribe`, `merge`, `verify` |
+| `--pages 19-30,40` | only these pages  | `transcribe`, `verify`          |
 
 `merge` only has `--chapter`: its unit of work is "one chapter → section files", and slicing by
 page would break registry consistency. For `verify`, `--pages` bypasses sampling (verify exactly
@@ -189,22 +185,20 @@ All stages are **idempotent**: they skip work units already recorded as done, an
 same command resumes after an interruption. `--force` has exactly one meaning — **redo completed
 units** (including refreshing those units' cached inputs, such as page images):
 
-| Command     | What `--force` redoes                                  |
-|-------------|--------------------------------------------------------|
-| `init`      | overwrite existing scaffold files                      |
-| `render`    | re-render existing page images                         |
-| `transcribe`| redo existing batches                                  |
-| `verify`    | redo verified pages (incl. 300 dpi image re-render)    |
-| `assets`    | overwrite existing crops                               |
-| `expt run`  | re-run finished experiment cells                       |
+| Command      | What `--force` redoes                               |
+|--------------|-----------------------------------------------------|
+| `init`       | overwrite existing scaffold files                   |
+| `transcribe` | redo existing batches                               |
+| `verify`     | redo verified pages (incl. 300 dpi image re-render) |
+| `expt run`   | re-run finished experiment cells                    |
 
 **4. Exit codes and the read/write boundary**
 
-| Code | Meaning                                          | Typical commands               |
-|------|--------------------------------------------------|--------------------------------|
-| 0    | success                                          | all                            |
-| 1    | ran fine but found issues (checks failed / cells)| `check`, `inspect`, `expt run` |
-| 2    | usage error or runtime error                     | all                            |
+| Code | Meaning                                           | Typical commands               |
+|------|---------------------------------------------------|--------------------------------|
+| 0    | success                                           | all                            |
+| 1    | ran fine but found issues (checks failed / cells) | `check`, `inspect`, `expt run` |
+| 2    | usage error or runtime error                      | all                            |
 
 Read-only commands (**never write files, never spend money**): `watch`, `report cost|quality|risk`,
 `check`, `inspect`, `expt show`. Only two commands call models: `transcribe` and `verify`
@@ -221,34 +215,36 @@ presets, empty state registries. `TARGET` is the book directory (falls back to `
 `--page-offset` encodes `PDF page = printed page + offset`. Model combos are written by hand
 in `config.toml` (see [Configuration](#configuration)).
 
-#### `pdfoenix scout`
-
-Scan the PDF text layer → `state/scout.json` (chapter/section/figure/table/equation structure).
-Other commands run it automatically when the chapter layout is missing; you rarely need it by
-hand.
-
-#### `pdfoenix render [--pages SPEC] [--force]`
-
-Render page images at `pipeline.render_dpi` (default 150) → `working/pages/`. Optional:
-`transcribe` renders missing pages on demand; use this only to warm the cache in bulk.
-
 #### `pdfoenix transcribe [--chapter chNN] [--pages SPEC] [--force]`
+
+Chapter-layout scouting (`state/scout.json`) and page rendering (`working/pages/`) are internal
+caches: `transcribe`/`verify` rebuild them on demand, so they are not separate commands.
 
 Transcribe in batches → `working/batches/chNN/pXXX-YYY.md`. Batch size comes from
 `pipeline.batch_pages`; every call's tokens/cost go to `logs/pipeline.db`; progress goes to
 `state/progress.json` (the `watch` feed).
 
-#### `pdfoenix merge [--chapter chNN]`
+**Write gate**: each batch is validated in memory before it hits disk (all page anchors present,
+anchored on their own lines, no duplicates, no restart fragments, no out-of-range anchors). A bad
+window is retried (`transcriber.attempts`); if it still fails the batch is **not written**, the
+reason goes into `state/progress.json`, and the command exits nonzero. Corrupt transcriptions
+never enter the corpus. `--rescan` rebuilds the chapter-layout cache and `--rerender` re-renders
+the selected page images first (escape hatches for the two internal caches).
+
+#### `pdfoenix merge [--chapter chNN] [--no-assets] [--recrop]`
 
 Merge batches, split into sections, register objects → `manuscript/chNN/`, updating
 `state/{formulas,figures,tables}.json`. Page anchors are resolved and stripped from the prose;
 re-merging first drops the chapter's previous contributions, so nothing is registered twice.
 
-#### `pdfoenix assets [--force] [--no-auto]`
+Merge also crops figures (`figures/figX-Y.png`) — the registry and the images are one object
+layer. `--no-assets` registers only; `--recrop` overwrites existing crops; `--chapter` crops only
+that chapter's figures.
 
-Crop figures → `figures/figX-Y.png`. Crop box priority: hand-written `crop` in the registry,
-then auto-detection (OCR captions + ink profiling). Low-confidence detections warn instead of
-cropping. `--no-auto` disables auto-detection.
+Merge also materializes cross-reference targets: theorem-like statements, figures and
+bibliography entries get `<span id="thm-…">` / `<span id="fig-…">` / `<span id="ref-…">`
+anchors, and dangling links are rewritten to case-insensitive, `lemma-` aliased, parent-section
+or fuzzy bibliography targets. Manual crop boxes survive re-merging.
 
 #### `pdfoenix verify [--chapter chNN] [--pages SPEC] [--full] [--force] [--audit off|dry|apply]`
 
@@ -257,15 +253,29 @@ different model reviews the full page. Corrections go to `state/corrections.json
 ledger.
 
 - `--full` skips sampling and verifies every candidate page; `--pages` verifies explicit pages;
+- Verification runs in chunks of `pipeline.verify_chunk_size` pages (default 5). Each chunk is
+  an independent call with its own retries (`transcriber.attempts`, default 3;
+  `transcriber.retry_delay` seconds of linear backoff);
+- A chunk persists its corrections and page progress as soon as it succeeds, so a rerun only
+  covers the remaining chunks; `watch` shows `done/total pages`, running chunks and failures;
+- **Run `merge` first**: sampling risk comes from `state/formulas.json`, and `--audit` scans
+  `manuscript/`. Without a merge the sample degrades to blind sampling and the audit finds no
+  files;
 - `--audit` controls the "global audit" (grep the whole book for the same error pattern):
   `dry` lists hits (default), `apply` rewrites them, `off` skips. The default can also be
   disabled via `review.global_audit`.
 
-#### `pdfoenix check`
+#### `pdfoenix check [--all]`
 
 Local rule validation: equation numbering continuity, footnote balance, cross links, registry
-consistency, residues (`\tag{}`, bare `■`, `\mathcal`), heading anchors. Exit code 1 on errors.
-Legitimate dangling anchors go into `known_dangling.txt` (one id per line).
+consistency, residues (`\tag{}`, bare `■`, `\mathcal`), heading anchors, duplicate anchor ids and
+unresolved FIGURE placeholders. Anchors include both heading attributes (`{#id}`) and
+merge-generated inline spans (`<span id="…">`). Exit code 1 on errors.
+
+`--all` additionally audits batch integrity (missing/duplicate/inline page anchors, restart
+fragments, chapter-stream `$$`/environment balance), dangling-link candidates, figure
+file/crop/page consistency and failed units. Legitimate dangling anchors go into
+`known_dangling.txt` (one id per line).
 
 #### `pdfoenix build [--out book.epub]`
 
@@ -311,11 +321,11 @@ One **batch** = one comparison round; one **cell** = one combo's complete run in
 
 Read-only display:
 
-| Invocation                      | Shows                                    |
-|---------------------------------|------------------------------------------|
-| `expt show`                     | overview of all batches                  |
-| `expt show --batch 2`           | cell detail for batch 2                  |
-| `expt show --combo 2 4`         | rows for these combos across batches     |
+| Invocation                      | Shows                                                                 |
+|---------------------------------|-----------------------------------------------------------------------|
+| `expt show`                     | overview of all batches                                               |
+| `expt show --batch 2`           | cell detail for batch 2                                               |
+| `expt show --combo 2 4`         | rows for these combos across batches                                  |
 | `expt show --batch 2 --combo 4` | preview: what batch 2 with combo 4 would look like (config unchanged) |
 
 #### `pdfoenix expt run [--batch N] [--combo ID ...] [--all] [-m NOTE] [--force]`
@@ -416,6 +426,8 @@ verify_chunk_size = 5
 
 [transcriber]
 timeout = 3600            # per-call timeout in seconds
+attempts = 3              # tries per transcribe window / verification chunk
+retry_delay = 2.0         # base retry delay in seconds (linear backoff)
 
 [expt]
 pages = "220-224,507-511"     # benchmark pages shared by every combo
@@ -505,13 +517,13 @@ Measured on a statistics scan, 20 pages × 4 difficulty windows (dense formulas 
 / prose), full transcription + full verification including retry overhead, normalized to 10
 pages:
 
-| Combo (transcribe × verify)                              | Corrections/100p | USD/10p | Positioning |
-|----------------------------------------------------------|-----------------:|--------:|-------------|
-| mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro                 |       **55**     |  0.68   | best quality |
-| **mimo-v2.6-pro × deepseek-flash#high** (default)        |       50–65      |  0.13   | value sweet spot |
-| deepseek-flash#high × mimo-v2.6-pro                      |         85       |  0.12   | cost first |
-| mimo-v2.6-flash × mimo-v2.6-pro                          |        190       |  0.11   | not recommended |
-| deepseek-flash#none × mimo-v2.6-pro                      |        250       |  0.13   | not recommended |
+| Combo (transcribe × verify)                       | Corrections/100p | USD/10p | Positioning      |
+|---------------------------------------------------|-----------------:|--------:|------------------|
+| mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro          |           **55** |    0.68 | best quality     |
+| **mimo-v2.6-pro × deepseek-flash#high** (default) |            50–65 |    0.13 | value sweet spot |
+| deepseek-flash#high × mimo-v2.6-pro               |               85 |    0.12 | cost first       |
+| mimo-v2.6-flash × mimo-v2.6-pro                   |              190 |    0.11 | not recommended  |
+| deepseek-flash#none × mimo-v2.6-pro               |              250 |    0.13 | not recommended  |
 
 - The default combo (row 2, the value sweet spot) ships with the defaults: `init`, then
   `export MIMO_API_KEY` and `export DEEPSEEK_API_KEY` and go; for maximum quality create a
@@ -558,7 +570,7 @@ pages, plus coverage and structural defects (wrong page anchors, tool-markup lea
 ## FAQ
 
 **My PDF has no text layer. What now?**
-`scout` needs the text layer to map the structure. OCR pure image scans first:
+Chapter-layout scouting needs the text layer. OCR pure image scans first:
 
 ```bash
 ocrmypdf input.pdf output.pdf
@@ -628,14 +640,15 @@ pdfoenix · My Book
 ────────────────────────────────────────────────────────────────────────
 chapter  stage       transcribe        verify   objects         corr  cost
 -------  ----------  ----------------  -------  --------------  ----  -----
-ch01     verify      5/5               2 pages  104 eq · 8 fig  1     $0.05
-ch02     transcribe  0/5 1 run 1 fail  -        -               1     $0.00
+ch01     verify      5/5               5/5 pages  104 eq · 8 fig  1   $0.05
+ch02     transcribe  0/5 1 run 1 fail  -          -               1   $0.00
 ────────────────────────────────────────────────────────────────────────
-$0.05 · 2 calls · 104k tokens · 2 agents active · 2 pages verified · 2 corrections · 1 failure
+$0.05 · 2 calls · 104k tokens · 2 agents active · 5/5 pages verified · 2 corrections · 1 failure
 ```
 
 One row per chapter: batch progress (done/total, `run` = in flight, `fail` = failed),
-verified pages, merged formulas/figures, corrections and cost; the bottom line is the
+verification page progress (`done/total pages`, plus `run`/`fail` chunk counts while a
+run is in flight), merged formulas/figures, corrections and cost; the bottom line is the
 book-wide total. The dashboard itself is read-only — every number comes from state files
 the pipeline has already written.
 

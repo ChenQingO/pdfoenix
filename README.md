@@ -48,13 +48,10 @@
 ```text
 PDF
  │
- ├─ scout      扫描文字层，识别章/节/图/表/公式
- ├─ render     渲染页面为图片
- ├─ transcribe 视觉模型逐页转写 → Markdown + LaTeX
- ├─ merge      合并批次、切节、注册对象
- ├─ assets     裁图（可选）
+ ├─ transcribe 逐页转写（自动侦察/渲染，写盘前校验）
+ ├─ merge      合并、锚点/链接、裁图
  ├─ verify     另一模型抽样复核
- ├─ check      本地规则校验
+ ├─ check      本地规则校验（`--all` 连批次/图/进度一起体检）
  ├─ build      pandoc 生成 EPUB
  └─ inspect    检查 EPUB 结构
 ```
@@ -71,7 +68,7 @@ PDF
 | Node.js + OpenCode               | 调用视觉模型   | Node 20+                      |
 | 模型网关                         | 转写 / 复核    | 任意 OpenCode 支持的 provider |
 
-> PDF 需带**文字层**（供 `scout` 侦察结构）；纯图片扫描件请先 OCR，如 `ocrmypdf input.pdf output.pdf`。
+> PDF 需带**文字层**（供章节结构侦察）；纯图片扫描件请先 OCR，如 `ocrmypdf input.pdf output.pdf`。
 
 ### 一键配置环境
 
@@ -115,18 +112,17 @@ pdfoenix init books/my_book \
   --page-offset 18
 
 # 2. 先只跑一章，确认无误
-pdfoenix -C books/my_book scout
 pdfoenix -C books/my_book transcribe --chapter ch01
 pdfoenix -C books/my_book merge --chapter ch01
 pdfoenix -C books/my_book verify --chapter ch01 --full
+pdfoenix -C books/my_book check --all
 pdfoenix -C books/my_book build
 
 # 3. 确认后跑完整本书
 pdfoenix -C books/my_book transcribe
 pdfoenix -C books/my_book merge
-pdfoenix -C books/my_book assets
 pdfoenix -C books/my_book verify
-pdfoenix -C books/my_book check
+pdfoenix -C books/my_book check --all
 pdfoenix -C books/my_book build
 pdfoenix -C books/my_book inspect
 ```
@@ -163,10 +159,10 @@ cd books/my_book && pdfoenix check     # 等价写法
 
 作用域参数只做一件事：**把工作限制在指定范围内，范围外的产物一个都不碰**。
 
-| 参数        | 含义                          | 支持的命令                       |
-|-------------|-------------------------------|----------------------------------|
-| `--chapter ch09` | 只处理这一章             | `transcribe`、`merge`、`verify`  |
-| `--pages 19-30,40` | 只处理这些页           | `render`、`transcribe`、`verify` |
+| 参数               | 含义         | 支持的命令                      |
+|--------------------|--------------|---------------------------------|
+| `--chapter ch09`   | 只处理这一章 | `transcribe`、`merge`、`verify` |
+| `--pages 19-30,40` | 只处理这些页 | `transcribe`、`verify`          |
 
 `merge` 只有 `--chapter`：它的工作单元是「一章 → 若干节文件」，按页切会破坏注册表一致性。
 `verify` 里 `--pages` 会绕过抽样（直接复核指定页），`--chapter` 则把抽样/全核限制在一章内。
@@ -176,22 +172,20 @@ cd books/my_book && pdfoenix check     # 等价写法
 所有阶段都是**幂等**的：跳过已记录为完成的工作单元，中断后重跑同一命令即可续跑。
 `--force` 只有一个含义——**重做已完成的单元**（连带刷新该单元的输入缓存，如页图）：
 
-| 命令        | `--force` 重做什么                       |
-|-------------|------------------------------------------|
-| `init`      | 覆盖已存在的脚手架文件                   |
-| `render`    | 重渲染已有页图                           |
-| `transcribe`| 重跑已有批次                             |
-| `verify`    | 重核已完成的页（含 300 dpi 页图重渲染）  |
-| `assets`    | 覆盖已有裁图                             |
-| `expt run`  | 重跑已完成的实验格子                     |
+| 命令         | `--force` 重做什么                      |
+|--------------|-----------------------------------------|
+| `init`       | 覆盖已存在的脚手架文件                  |
+| `transcribe` | 重跑已有批次                            |
+| `verify`     | 重核已完成的页（含 300 dpi 页图重渲染） |
+| `expt run`   | 重跑已完成的实验格子                    |
 
 **4. 退出码与读写边界**
 
-| 退出码 | 含义                                        | 典型命令                     |
-|--------|---------------------------------------------|------------------------------|
-| 0      | 成功                                        | 全部                         |
-| 1      | 跑完了，但发现问题（校验未通过/实验有失败）| `check`、`inspect`、`expt run` |
-| 2      | 用法错误或运行时错误                        | 全部                         |
+| 退出码 | 含义                                        | 典型命令                       |
+|--------|---------------------------------------------|--------------------------------|
+| 0      | 成功                                        | 全部                           |
+| 1      | 跑完了，但发现问题（校验未通过/实验有失败） | `check`、`inspect`、`expt run` |
+| 2      | 用法错误或运行时错误                        | 全部                           |
 
 只读命令（**从不改文件、从不花钱**）：`watch`、`report cost|quality|risk`、`check`、`inspect`、`expt show`。
 花钱的只有两个模型调用点：`transcribe`、`verify`（以及 `expt run`）。
@@ -206,31 +200,34 @@ cd books/my_book && pdfoenix check     # 等价写法
 `TARGET` 是书目录（省略时用 `-C`）；`--page-offset` 满足 `PDF 页 = 印刷页 + offset`。
 模型组合在 `config.toml` 里手写（见[配置](#配置)中的「组合」一节）。
 
-#### `pdfoenix scout`
-
-扫描 PDF 文字层 → `state/scout.json`（章/节/图/表/公式结构）。
-其它命令需要章结构时会自动补跑，一般不必手动执行。
-
-#### `pdfoenix render [--pages SPEC] [--force]`
-
-按 `pipeline.render_dpi`（默认 150）渲染页图 → `working/pages/`。
-可选：`transcribe` 会自动补渲染缺失页，只有想提前批量渲染时才需要它。
-
 #### `pdfoenix transcribe [--chapter chNN] [--pages SPEC] [--force]`
+
+章节结构侦察（`state/scout.json`）和页图渲染（`working/pages/`）都是内部缓存：
+`transcribe`/`verify` 需要时自动补跑，不再单独暴露命令。
 
 分批转写 → `working/batches/chNN/pXXX-YYY.md`。批大小由 `pipeline.batch_pages` 决定；
 每次调用的 token/成本入账 `logs/pipeline.db`；进度写入 `state/progress.json`（供 `watch` 读取）。
 
-#### `pdfoenix merge [--chapter chNN]`
+**写盘闸门**：每个批次先在内存里校验（页锚点是否齐全/独占一行/重复、重启残片、
+超范围锚点），不合格就重试该窗口（`transcriber.attempts`）；仍不合格则**不写批次**、
+把失败原因记入 `state/progress.json` 并报错退出。损坏的转写不会进入语料库。
+
+`--rescan` 重建章节布局缓存，`--rerender` 在转写前重渲染选中页图（两个内部缓存
+的逃生口）。
+
+#### `pdfoenix merge [--chapter chNN] [--no-assets] [--recrop]`
 
 合并批次、切节、注册对象 → `manuscript/chNN/`，同步更新
 `state/{formulas,figures,tables}.json`。合并时解析页锚点并将其从正文剥离；
 重复合并会先清掉该章旧贡献，不会产生重复注册。
 
-#### `pdfoenix assets [--force] [--no-auto]`
+合并结束后自动裁图（`figures/figX-Y.png`）——注册表与图片是同一个对象层的产物。
+`--no-assets` 只合并不裁图；`--recrop` 覆盖已有裁图；`--chapter` 只处理该章的图。
 
-裁图 → `figures/figX-Y.png`。裁剪框来源优先级：注册表里人工标注的 `crop` > 自动检测
-（OCR 题注 + 墨迹投影）；低置信度只告警不硬裁。`--no-auto` 关闭自动检测。
+合并还会补齐交叉引用的目标：定理/引理/推论/定义、图、参考文献条目自动生成
+`<span id="thm-…">` / `<span id="fig-…">` / `<span id="ref-…">` 锚点，并把大小写、
+`lemma-` 别名、子节父级回退、参考文献拼写差异导致的悬空链接改写成可解析目标。
+人工裁图框在重复合并时保留。
 
 #### `pdfoenix verify [--chapter chNN] [--pages SPEC] [--full] [--force] [--audit off|dry|apply]`
 
@@ -238,15 +235,25 @@ cd books/my_book && pdfoenix check     # 等价写法
 `state/corrections.json` 与成本账本。
 
 - `--full` 跳过抽样，复核候选页全部；`--pages` 复核指定页；
+- 按 `pipeline.verify_chunk_size`（默认 5 页）分块，每块独立调用、独立重试
+  （`transcriber.attempts`，默认 3 次；`transcriber.retry_delay` 秒线性退避）；
+- 每块成功立即落盘纠错与页进度，中途失败重跑只补剩余页，已完成的分块不会重复计费；
+  `watch` 的 verify 列显示 `done/total pages`、运行中的块和失败的块；
+- **必须先 `merge`**：抽样风险来自 `state/formulas.json`，`--audit` 扫描 `manuscript/`；
+  未合并时抽样退化成盲抽，审计也扫不到任何文件；
 - `--audit` 控制「全局审计」（把纠错 pattern 全书 grep 出同类错误）：
   `dry` 只列出命中（默认），`apply` 批量改写，`off` 跳过；
   默认值也可由配置 `review.global_audit` 关掉。
 
-#### `pdfoenix check`
+#### `pdfoenix check [--all]`
 
 本地规则校验：公式编号连续性、脚注配平、交叉链接、注册表一致性、残留
-（`\tag{}`、裸 `■`、`\mathcal`）、标题锚点。有错误时退出码 1。
-合法的悬空锚点写进 `known_dangling.txt`（每行一个 id）。
+（`\tag{}`、裸 `■`、`\mathcal`）、标题锚点、重复锚点 id、未解析的 FIGURE 占位符。
+锚点既识别标题的 `{#id}`，也识别合并生成的 `<span id="…">`。有错误时退出码 1。
+
+`--all` 额外做全链路体检：批次完整性（缺页/重复/行内锚点、重启残片、章节流
+`$$`/环境配对）、悬空链接的候选目标、图片文件/裁图框/页码、失败单元。
+合法悬空锚点写进 `known_dangling.txt`（每行一个 id）。
 
 #### `pdfoenix build [--out book.epub]`
 
@@ -287,11 +294,11 @@ EPUB 结构验收（mimetype 位置/压缩、container.xml、OPF manifest/spine�
 
 只读展示：
 
-| 写法                            | 显示                       |
-|---------------------------------|----------------------------|
-| `expt show`                     | 所有批次总览               |
-| `expt show --batch 2`           | 批次 2 的格子明细          |
-| `expt show --combo 2 4`         | 这些组合跨批次的行         |
+| 写法                            | 显示                                       |
+|---------------------------------|--------------------------------------------|
+| `expt show`                     | 所有批次总览                               |
+| `expt show --batch 2`           | 批次 2 的格子明细                          |
+| `expt show --combo 2 4`         | 这些组合跨批次的行                         |
 | `expt show --batch 2 --combo 4` | 预览：批次 2 换成组合 4 会怎样（不落配置） |
 
 #### `pdfoenix expt run [--batch N] [--combo ID ...] [--all] [-m 备注] [--force]`
@@ -383,6 +390,8 @@ verify_chunk_size = 5
 
 [transcriber]
 timeout = 3600            # 单次模型调用的超时（秒）
+attempts = 3              # 每个转写窗口/复核分块的重试次数（含首次）
+retry_delay = 2.0         # 重试间隔基数（秒，线性退避）
 
 [expt]
 pages = "220-224,507-511"     # 全部组合共用的基准页
@@ -467,11 +476,11 @@ verify = "mimo/mimo-v2.6-pro"   # 必须与 transcribe 不同
 
 | 组合（transcribe × verify）                              | 纠错/100页 | 美元/10页 | 定位       |
 |----------------------------------------------------------|-----------:|----------:|------------|
-| mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro                 |   **55**   |   0.68    | 质量最佳   |
-| **mimo-v2.6-pro × deepseek-flash#high**（默认组合）      |   50–65    |   0.13    | 性价比拐点 |
-| deepseek-flash#high × mimo-v2.6-pro                      |     85     |   0.12    | 成本优先   |
-| mimo-v2.6-flash × mimo-v2.6-pro                          |    190     |   0.11    | 不推荐     |
-| deepseek-flash#none × mimo-v2.6-pro                      |    250     |   0.13    | 不推荐     |
+| mimo-v2.6-pro-ultraspeed × mimo-v2.6-pro                 |     **55** |      0.68 | 质量最佳   |
+| **mimo-v2.6-pro × deepseek-flash#high**（默认组合）      |      50–65 |      0.13 | 性价比拐点 |
+| deepseek-flash#high × mimo-v2.6-pro                      |         85 |      0.12 | 成本优先   |
+| mimo-v2.6-flash × mimo-v2.6-pro                          |        190 |      0.11 | 不推荐     |
+| deepseek-flash#none × mimo-v2.6-pro                      |        250 |      0.13 | 不推荐     |
 
 - 默认组合（第 2 行，性价比拐点）已随默认配置提供：`init` 后
   `export MIMO_API_KEY` 与 `export DEEPSEEK_API_KEY` 即可直接开工；
@@ -513,7 +522,7 @@ pdfoenix -C books/my_book report risk                # 风险分布（标定用�
 ## 常见问题
 
 **PDF 没有文字层怎么办？**
-`scout` 依赖文字层侦察结构。纯图片扫描件先 OCR 一遍：
+章结构侦察依赖文字层。纯图片扫描件先 OCR 一遍：
 
 ```bash
 ocrmypdf input.pdf output.pdf
@@ -580,14 +589,15 @@ pdfoenix · My Book
 ────────────────────────────────────────────────────────────────────────
 chapter  stage       transcribe        verify   objects         corr  cost
 -------  ----------  ----------------  -------  --------------  ----  -----
-ch01     verify      5/5               2 pages  104 eq · 8 fig  1     $0.05
-ch02     transcribe  0/5 1 run 1 fail  -        -               1     $0.00
+ch01     verify      5/5               5/5 pages  104 eq · 8 fig  1   $0.05
+ch02     transcribe  0/5 1 run 1 fail  -          -               1   $0.00
 ────────────────────────────────────────────────────────────────────────
-$0.05 · 2 calls · 104k tokens · 2 agents active · 2 pages verified · 2 corrections · 1 failure
+$0.05 · 2 calls · 104k tokens · 2 agents active · 5/5 pages verified · 2 corrections · 1 failure
 ```
 
-每章一行：批次进度（完成/总数，`run` = 在跑，`fail` = 失败）、已复核页数、
-合并后的公式/图、纠错数与花费；底部是全书汇总。看板本身只读，
+每章一行：批次进度（完成/总数，`run` = 在跑，`fail` = 失败）、复核页进度
+（复核进行中为 `done/total pages`，另标 `run`/`fail` 分块数）、合并后的公式/图、
+纠错数与花费；底部是全书汇总。看板本身只读，
 所有数字都来自流水线已落盘的状态文件。
 
 ## 项目结构
