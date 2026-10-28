@@ -31,9 +31,9 @@ from pathlib import Path
 from typing import Any
 
 from pdfoenix.core.config import load_config
-from pdfoenix.core.pages import PAGE_ANCHOR_RE
 from pdfoenix.core.telemetry import Telemetry
 from pdfoenix.transcribe.protocol import TOOL_MARKUP_RE, Correction
+from pdfoenix.verify.content import VerifyChunk, plan_verify
 
 #: Agent ids defined by ``presets/opencode.jsonc``.
 TRANSCRIBE_AGENT = "pdfoenix-transcribe"
@@ -69,15 +69,6 @@ class _CallOutcome:
     @property
     def ok(self) -> bool:
         return self.error is None and self.returncode == 0
-
-
-@dataclass(frozen=True)
-class _Chunk:
-    """A group of page images plus the content that belongs with them."""
-
-    images: list[Path]
-    content: str
-    unit_id: str
 
 
 def _chunked(items: Sequence[Any], size: int) -> list[list[Any]]:
@@ -182,24 +173,6 @@ def _extract_json_payload(text: str) -> Any:
         except json.JSONDecodeError:
             continue
     raise OpenCodeError("verifier response contains no valid JSON")
-
-
-def _page_sections(content: str) -> tuple[str, dict[int, str]] | None:
-    """Split anchored content into ``(preamble, {page: section_text})``.
-
-    Returns ``None`` when there are no page anchors, which tells the caller to
-    fall back to a single verification call for the whole unit.
-    """
-    matches = list(PAGE_ANCHOR_RE.finditer(content))
-    if not matches:
-        return None
-    preamble = content[:matches[0].start()]
-    sections: dict[int, str] = {}
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
-        page = int(match.group(1))
-        sections[page] = sections.get(page, "") + content[match.start():end]
-    return preamble, sections
 
 
 class OpenCodeTranscriber:
@@ -326,29 +299,9 @@ class OpenCodeTranscriber:
         return corrections
 
     # ── Chunk planning ──────────────────────────────────────────────────
-    def _verify_chunks(self, images: list[Path], content: str) -> list[_Chunk]:
+    def _verify_chunks(self, images: list[Path], content: str) -> list[VerifyChunk]:
         """Split images and anchored content into aligned verification chunks."""
-        image_chunks = _chunked(images, self.verify_chunk_size)
-        if len(image_chunks) == 1:
-            return [_Chunk(images, content, _default_unit_id(images))]
-
-        sections = _page_sections(content)
-        if sections is None:
-            return [_Chunk(images, content, _default_unit_id(images))]
-        preamble, by_page = sections
-        if any(_image_page(image) not in by_page for image in images):
-            return [_Chunk(images, content, _default_unit_id(images))]
-
-        chunks = []
-        for index, chunk_images in enumerate(image_chunks):
-            parts = [preamble] if index == 0 else []
-            for image in chunk_images:
-                page = _image_page(image)
-                parts.append(by_page.get(page, "") if page is not None else "")
-            chunks.append(
-                _Chunk(chunk_images, "\n".join(part for part in parts if part.strip()),
-                       _default_unit_id(chunk_images)))
-        return chunks
+        return plan_verify(images, content, self.verify_chunk_size)
 
     # ── Prompt construction ─────────────────────────────────────────────
     def _transcribe_prompt(self, images: list[Path], task: str) -> str:

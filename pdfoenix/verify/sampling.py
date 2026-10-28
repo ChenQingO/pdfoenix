@@ -253,7 +253,7 @@ def sample_pages(
         raise SamplingError(f"unknown sampling strategy {name!r}")
     page_risks = compute_page_risks(book, settings)
     if not page_risks:
-        raise SamplingError("no candidate page images found; run 'pdfoenix render' first")
+        raise SamplingError("no candidate page images found; run 'pdfoenix transcribe' first")
     return chosen.select(page_risks, settings, rng or random.Random(settings.seed))
 
 

@@ -4,11 +4,60 @@ Verification needs the transcribed content that belongs to each selected page.
 The merged manuscript has page anchors stripped, so the batches remain the only
 place where page -> text is still explicit.  Legacy batches without anchors fall
 back to their filename's first page, matching ``core.merge``'s behaviour.
+
+:func:`plan_verify` turns one verification selection into page-sized chunks that
+pair images with exactly their own content, so the CLI can run, retry and persist
+each chunk independently.
 """
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from pdfoenix.core.book import Book
-from pdfoenix.core.pages import PAGE_LINE_RE, batch_stem
+from pdfoenix.core.pages import PAGE_ANCHOR_RE, PAGE_LINE_RE, batch_stem
+
+
+@dataclass(frozen=True)
+class VerifyChunk:
+    """One verification call: at most ``verify_chunk_size`` page images."""
+
+    images: tuple[Path, ...]
+    content: str
+    unit_id: str
+    pages: tuple[int, ...]
+
+
+def plan_verify(images, content: str, chunk_size: int) -> list[VerifyChunk]:
+    """Split one verification selection into aligned page chunks.
+
+    Every chunk carries the page images and only the anchored content that
+    belongs to those pages, so the verifier sees the same page set it did during
+    transcription.  When the content cannot be split by page (legacy batches
+    without anchors, or an image page missing from the content), the whole
+    selection stays one chunk rather than risking mismatched evidence.
+    """
+    paths = [Path(image) for image in images]
+    if not paths:
+        return []
+    groups = _chunked(paths, chunk_size)
+    if len(groups) == 1:
+        return [_chunk(paths, content)]
+
+    sections = _page_sections(content)
+    if sections is None:
+        return [_chunk(paths, content)]
+    preamble, by_page = sections
+    if any(_image_page(image) not in by_page for image in paths):
+        return [_chunk(paths, content)]
+
+    chunks = []
+    for index, group in enumerate(groups):
+        parts = [preamble] if index == 0 else []
+        for image in group:
+            pages = _image_page(image)
+            parts.append(by_page.get(pages, ""))
+        chunks.append(_chunk(group, "\n".join(part for part in parts if part.strip())))
+    return chunks
 
 
 def collect_page_content(book: Book, batches_dir=None) -> dict[int, str]:
@@ -51,6 +100,64 @@ def anchor_labels(text: str, stem):
     anchored = {int(match.group(1)) for match in matches}
     positional = bool(expected) and bool(matches) and not expected & anchored
     return matches, expected, positional
+
+
+def _chunked(items, size: int) -> list[list]:
+    """Split ``items`` into consecutive chunks of at most ``size`` items."""
+    if size <= 0:
+        raise ValueError("chunk size must be positive")
+    return [list(items[start:start + size]) for start in range(0, len(items), size)]
+
+
+def _image_page(image: Path) -> int | None:
+    """Last run of digits in an image stem, e.g. ``pdfpage_399`` -> ``399``."""
+    matches = _DIGITS_RE.findall(image.stem)
+    return int(matches[-1]) if matches else None
+
+
+def _unit_id(pages, images) -> str:
+    """Human-readable unit id derived from page numbers.
+
+    Contiguous pages keep the familiar ``p399-403`` form; sampled verification
+    chunks are usually sparse, so they list every page (``p28+35+49``) instead
+    of pretending a 39-page range was verified in one call.
+    """
+    ordered = sorted(page for page in pages if page is not None)
+    if not ordered:
+        return "+".join(image.stem for image in images)
+    if len(ordered) == 1:
+        return f"p{ordered[0]}"
+    if ordered == list(range(ordered[0], ordered[-1] + 1)):
+        return f"p{ordered[0]}-{ordered[-1]}"
+    return "p" + "+".join(str(page) for page in ordered)
+
+
+def _chunk(images, content: str) -> VerifyChunk:
+    pages = tuple(sorted(page for page in (_image_page(image) for image in images)
+                         if page is not None))
+    return VerifyChunk(tuple(images), content,
+                       _unit_id(pages, images), pages)
+
+
+def _page_sections(content: str) -> tuple[str, dict[int, str]] | None:
+    """Split anchored content into ``(preamble, {page: section_text})``.
+
+    Returns ``None`` when there are no page anchors, which tells the caller to
+    fall back to a single verification call for the whole unit.
+    """
+    matches = list(PAGE_ANCHOR_RE.finditer(content))
+    if not matches:
+        return None
+    preamble = content[:matches[0].start()]
+    sections: dict[int, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        page = int(match.group(1))
+        sections[page] = sections.get(page, "") + content[match.start():end]
+    return preamble, sections
+
+
+_DIGITS_RE = re.compile(r"\d+")
 
 
 def _split_batch(text: str, batch: Path) -> dict[int, str]:

@@ -9,6 +9,7 @@ it has cost so far.  Rich is used when installed; otherwise a plain-text
 frame is printed, so the command still works in a minimal environment.
 """
 import json
+import re
 import sqlite3
 import sys
 import time
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 
 #: One column tuple shared by the plain and the Rich renderer.
 COLUMNS = ("chapter", "stage", "transcribe", "verify", "objects", "corr", "cost")
+_CHAPTER_RE = re.compile(r"ch\d+")
 
 
 def dashboard_data(book: Book) -> dict:
@@ -48,8 +50,10 @@ def dashboard_data(book: Book) -> dict:
     totals.update({
         "agents": len(agents),
         "verified": sum(row["verified"] for row in chapters),
+        "verify_done": sum(row["verify_done"] for row in chapters),
+        "verify_total": sum(row["verify_total"] for row in chapters),
         "corrections": sum(row["corrections"] for row in chapters),
-        "failed": sum(row["failed"] for row in chapters),
+        "failed": sum(row["failed"] + row["verify_failed"] for row in chapters),
     })
     return {"title": book.config["book"].get("title") or book.root.name,
             "chapters": chapters, "totals": totals}
@@ -125,11 +129,13 @@ def _chapter_rows(book: Book, progress: dict, scout: dict,
         if name != "unknown":
             corrected[name] = corrected.get(name, 0) + 1
     failed = _failed_units(progress)
+    verify_plan = _verify_plan(progress)
     size = int(book.config["pipeline"]["batch_pages"])
     rows = []
     for name in names:
         merged = chapters.get(name, {})
         span = ranges.get(name)
+        plan = verify_plan.get(name, {})
         row = {
             "name": name,
             "batches_done": len(book.batches(name)),
@@ -138,12 +144,19 @@ def _chapter_rows(book: Book, progress: dict, scout: dict,
             "running": sum(1 for agent in agents if agent.startswith(f"{name}/")),
             "failed": failed.get(name, 0),
             "verified": verified.get(name, 0),
+            "verify_total": plan.get("total", 0),
+            "verify_done": plan.get("done", 0),
+            "verify_running": plan.get("running", 0),
+            "verify_failed": plan.get("failed", 0),
             "merged": bool(merged.get("merged")),
             "formulas": int(merged.get("formulas", 0)),
             "figures": int(merged.get("figures", 0)),
             "corrections": corrected.get(name, 0),
             "cost": float(costs.get(name, 0.0)),
         }
+        row["verify_running"] = max(
+            row["verify_running"],
+            sum(1 for agent in agents if agent.startswith(f"verify/{name}/")))
         row["stage"] = _stage(row)
         rows.append(row)
     return rows
@@ -151,7 +164,7 @@ def _chapter_rows(book: Book, progress: dict, scout: dict,
 
 def _stage(row: dict) -> str:
     """The chapter's current position along the pipeline."""
-    if row["verified"]:
+    if row["verified"] or row.get("verify_total") or row.get("verify_running"):
         return "verify"
     if row["merged"]:
         return "merged"
@@ -171,15 +184,40 @@ def _verified_pages(progress: dict) -> list[int]:
 
 
 def _failed_units(progress: dict) -> dict[str, int]:
-    """Failed units per chapter (``transcribe/chNN/pXXX-YYY`` markers)."""
+    """Failed transcription units per chapter (``transcribe/chNN/pXXX-YYY``)."""
     failed: dict[str, int] = {}
     for unit, entry in progress.get("units", {}).items():
         if entry.get("status") != "failed":
             continue
         parts = str(unit).split("/")
-        if len(parts) >= 2:
+        if len(parts) >= 3 and parts[0] == "transcribe" and _CHAPTER_RE.fullmatch(parts[1]):
             failed[parts[1]] = failed.get(parts[1], 0) + 1
     return failed
+
+
+def _verify_plan(progress: dict) -> dict[str, dict]:
+    """Aggregate verification chunk units into per-chapter page progress.
+
+    Chunk units are ``verify/chNN/pA-pB`` and carry the pages they cover, so the
+    dashboard can show ``done/total`` pages while the run is still in flight.
+    Per-page ``verify/pN`` marks remain the source of completed page counts.
+    """
+    plan: dict[str, dict] = {}
+    for unit, entry in progress.get("units", {}).items():
+        parts = str(unit).split("/")
+        if len(parts) != 3 or parts[0] != "verify" or not _CHAPTER_RE.fullmatch(parts[1]):
+            continue
+        pages = entry.get("pages")
+        count = len(pages) if isinstance(pages, list) and pages else 1
+        row = plan.setdefault(parts[1], {"total": 0, "done": 0,
+                                         "running": 0, "failed": 0})
+        row["total"] += count
+        status = entry.get("status")
+        if status == "done":
+            row["done"] += count
+        elif status in {"running", "failed"}:
+            row[status] += 1
+    return plan
 
 
 def _active_agents(book: Book) -> set:
@@ -216,11 +254,20 @@ def _frame_cells(row: dict) -> dict[str, str]:
         transcribe += f" {row['running']} run"
     if row["failed"]:
         transcribe += f" {row['failed']} fail"
+    verify = "-"
+    if row["verify_total"]:
+        verify = f"{row['verify_done']}/{row['verify_total']} pages"
+    elif row["verified"]:
+        verify = f"{row['verified']} pages"
+    if row["verify_running"]:
+        verify += f" {row['verify_running']} run"
+    if row["verify_failed"]:
+        verify += f" {row['verify_failed']} fail"
     return {
         "chapter": row["name"],
         "stage": row["stage"],
         "transcribe": transcribe,
-        "verify": f"{row['verified']} pages" if row["verified"] else "-",
+        "verify": verify,
         "objects": (f"{row['formulas']} eq · {row['figures']} fig"
                     if row["merged"] else "-"),
         "corr": str(row["corrections"]) if row["corrections"] else "-",
@@ -229,12 +276,16 @@ def _frame_cells(row: dict) -> dict[str, str]:
 
 
 def _totals_line(totals: dict) -> str:
+    if totals.get("verify_total"):
+        verified = (f"{totals['verify_done']}/{totals['verify_total']} pages verified")
+    else:
+        verified = f"{totals['verified']} pages verified"
     return " · ".join([
         f"${totals['cost']:.2f}",
         f"{totals['calls']} calls",
         f"{_format_tokens(totals['tokens'])} tokens",
         f"{_plural(totals['agents'], 'agent')} active",
-        f"{totals['verified']} pages verified",
+        verified,
         _plural(totals["corrections"], "correction"),
         _plural(totals["failed"], "failure"),
     ])

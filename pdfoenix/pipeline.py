@@ -89,15 +89,45 @@ def verify_images(book: Book, pages, *, force: bool = False) -> list[Path]:
 
 # ── Progress and corrections ────────────────────────────────────────────
 def set_progress(book: Book, unit: str, *, status: str,
-                 path: str | None = None) -> None:
-    """Record one unit's status in ``state/progress.json`` (the watch feed)."""
+                 path: str | None = None, pages=None,
+                 error: str | None = None) -> None:
+    """Record one unit's status in ``state/progress.json`` (the watch feed).
+
+    ``pages`` is stored on verification chunks so ``watch`` can show page-level
+    progress (``done/total``) instead of just a unit count.  ``error`` keeps the
+    deterministic validation/retry reason on failed transcribe units.
+    """
     def mutate(data):
         entry = data["units"].get(unit, {})
         entry["status"] = status
         entry["updated"] = datetime.now(UTC).isoformat(timespec="seconds")
         if path:
             entry["path"] = path
+        if pages is not None:
+            entry["pages"] = [int(page) for page in pages]
+        if error:
+            entry["error"] = error
+        else:
+            entry.pop("error", None)
         data["units"][unit] = entry
+
+    book.state.update("progress", mutate)
+
+
+def clear_verify_plan(book: Book) -> None:
+    """Drop unfinished verification chunks before a new plan is written.
+
+    Per-page ``verify/pN`` marks stay untouched: they are the durable record of
+    completed work, while ``verify/chNN/pA-pB`` chunk units are just the current
+    plan and would otherwise linger after a failed or interrupted run.
+    """
+    def mutate(data):
+        units = data.get("units", {})
+        for unit in [name for name, entry in units.items()
+                     if str(name).startswith("verify/")
+                     and str(name).count("/") == 2
+                     and entry.get("status") != "done"]:
+            units.pop(unit, None)
 
     book.state.update("progress", mutate)
 

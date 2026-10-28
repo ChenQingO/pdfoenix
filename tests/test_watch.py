@@ -154,3 +154,27 @@ def test_watch_rich_renders_frames_in_place(tmp_path):
     _watch_rich(book, 0, 2, console=Console(file=stream, force_terminal=True,
                                             width=80))
     assert stream.getvalue().count("Dashboard Book") == 2
+
+
+def test_verify_chunk_plan_shows_page_progress_and_failures(tmp_path):
+    book = make_book(tmp_path)
+    book.state.update("progress", lambda data: data["units"].update({
+        "verify/ch01/p1-2": {"status": "done", "pages": [1, 2]},
+        "verify/ch01/p5-6": {"status": "running", "pages": [5, 6]},
+        "verify/ch01/p7": {"status": "failed", "pages": [7]},
+    }))
+
+    data = dashboard_data(book)
+    row = data["chapters"][0]
+    assert row["verify_total"] == 5
+    assert row["verify_done"] == 2
+    assert row["verify_running"] == 1
+    assert row["verify_failed"] == 1
+    assert row["stage"] == "verify"
+    assert data["totals"]["verify_total"] == 5
+    assert data["totals"]["failed"] == 1
+
+    text = render_dashboard(book)
+    assert "2/5 pages" in text
+    assert "1 run" in text
+    assert "1 fail" in text
