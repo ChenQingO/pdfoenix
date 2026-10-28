@@ -273,3 +273,45 @@ def test_chapter_title_normalized(tmp_path):
     merge_chapter(book, "ch03")
     assert sec(book, "00_chapter.md").strip() == \
         "# Chapter 3. Test Chapter {#ch-3}"
+
+
+def test_uppercase_problems_heading_uses_canonical_section_key(tmp_path):
+    batch = r"""# Chapter 3. Test Chapter {#ch-3}
+
+## PROBLEMS
+
+<!-- page:110 -->
+$$
+x = 1 \qquad (1)
+$$
+"""
+    book = make_book(tmp_path, {"p110-110": batch})
+    merge_chapter(book, "ch03")
+
+    assert (book.manuscript_dir / "ch03" / "sec3-problems.md").exists()
+    reg = book.state.load("formulas")["formulas"]
+    assert sorted(reg) == ["eq3-Problems-1"]
+    assert reg["eq3-Problems-1"]["section"] == "Problems"
+
+
+def test_remerge_preserves_manual_crop_box(tmp_path):
+    batch = r"""# Chapter 3. Test Chapter {#ch-3}
+
+## 3.1 Introduction {#sec-3-1}
+
+<!-- page:100 -->
+<!-- FIGURE 3.1. Caption: A plot. Content: A simple plot. -->
+"""
+    book = make_book(tmp_path, {"p100-100": batch})
+    merge_chapter(book, "ch03")
+    crop = [0.1, 0.2, 0.9, 0.8]
+
+    def mutate(data):
+        data["figures"]["fig3-1"]["crop"] = crop
+        data["figures"]["fig3-1"]["crop_source"] = "manual"
+
+    book.state.update("figures", mutate)
+    merge_chapter(book, "ch03")
+    entry = book.state.load("figures")["figures"]["fig3-1"]
+    assert entry["crop"] == crop
+    assert entry["crop_source"] == "manual"

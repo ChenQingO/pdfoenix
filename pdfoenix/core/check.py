@@ -8,6 +8,7 @@ The report distinguishes ``error`` (fails the build) from ``warning`` (e.g. a
 section whose numbering does not start at 1 is suspicious but not fatal).
 """
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,12 +17,16 @@ from pdfoenix.core.merge import EQ_NUMBER_RE, table_filename
 from pdfoenix.core.pages import PAGE_ANCHOR_RE
 
 LINK_RE = re.compile(r"]\(#([A-Za-z0-9_-]+)\)")
-ANCHOR_RE = re.compile(r"\{#([A-Za-z0-9_-]+)")
+# Anchor ids live either in heading attributes (`## X {#sec-1-1}`) or in inline
+# spans inserted by core.merge for statements, figures and bibliography entries.
+ANCHOR_RE = re.compile(
+    r"\{#([A-Za-z0-9_-]+)|<span\s+id=[\"']([A-Za-z0-9_-]+)[\"']")
 FN_DEF_RE = re.compile(r"^\[\^([A-Za-z0-9_-]+)]", re.MULTILINE)
 FN_USE_RE = re.compile(r"\[\^([A-Za-z0-9_-]+)](?!:)")
 TABLE_PH_RE = re.compile(r"<!--\s*TABLE\s+([0-9A-Za-z.\-]+)\s*-->")
 IMG_RE = re.compile(r"!\[[^]]*]\((figures/[^)]+)\)")
 HEADING_LINE_RE = re.compile(r"^#{1,3} ")
+PLACEHOLDER_RE = re.compile(r"<!--\s*FIGURE\b")
 
 
 @dataclass
@@ -118,8 +123,16 @@ def check_book(book: Book, expected: dict | None = None) -> CheckReport:
 
     # Global: anchor ids, footnote pairing.
     anchors = set()
+    anchor_counts: Counter = Counter()
     for text in all_text.values():
-        anchors |= set(ANCHOR_RE.findall(text))
+        for heading, span in ANCHOR_RE.findall(text):
+            anchor = heading or span
+            anchors.add(anchor)
+            anchor_counts[anchor] += 1
+    for anchor, count in sorted(anchor_counts.items()):
+        if count > 1:
+            report.add("anchor_duplicate", "manuscript",
+                       f"duplicate anchor id {anchor!r} ({count} occurrences)")
     combined = "".join(all_text.values())
     defined = set(FN_DEF_RE.findall(combined))
     used = set(FN_USE_RE.findall(combined))
@@ -203,6 +216,11 @@ def check_book(book: Book, expected: dict | None = None) -> CheckReport:
             for target in set(LINK_RE.findall(text)):
                 if target not in anchors and target not in known_dangling:
                     report.add("link", location, f"dangling link #{target}")
+
+            # A leftover object placeholder means merge never resolved it.
+            if PLACEHOLDER_RE.search(text):
+                report.add("object_placeholder", location,
+                           "unresolved FIGURE placeholder left in the manuscript")
 
             # Residue checks.
             if "\\tag" in text:

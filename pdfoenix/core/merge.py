@@ -24,7 +24,9 @@ Key conventions
 """
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from pdfoenix.core.anchors import add_anchors, anchor_ids, parse_reference_entries, resolve_links
 from pdfoenix.core.book import Book
 from pdfoenix.core.config import risk_weights
 from pdfoenix.core.pages import PAGE_LINE_RE, batch_stem
@@ -185,11 +187,18 @@ def section_filename(chapter: str, key: str) -> str:
 
 
 def _first_key(text: str) -> str:
-    """Return the first section-heading token in a block (raises if absent)."""
+    """Return the first section-heading token in a block (raises if absent).
+
+    Models transcribe the problem-set heading as ``## PROBLEMS`` as often as
+    ``## Problems``.  Routing already collapses both to ``secN-problems.md``;
+    normalizing the key here keeps the registered formula section (``Problems``)
+    in sync with ``check``'s filename-derived key.
+    """
     match = H2_RE.search(text)
     if not match:
         raise MergeError("section block has no '## ' heading")
-    return match.group(1)
+    key = match.group(1)
+    return "Problems" if key.lower() == "problems" else key
 
 
 # ── Object registration ─────────────────────────────────────────────────
@@ -425,7 +434,8 @@ def _drop_chapter_entries(registry, chapter_num):
                 registry["page_to_formulas"].pop(page_key)
 
 
-def merge_chapter(book: Book, chapter: str, telemetry=None) -> MergeSummary:
+def merge_chapter(book: Book, chapter: str, telemetry=None, *,
+                  resolve: bool = True) -> MergeSummary:
     """Merge one chapter and return a summary of what was produced."""
     chapter_num = chapter_number(chapter)
     weights = risk_weights(book.config)
@@ -492,6 +502,13 @@ def merge_chapter(book: Book, chapter: str, telemetry=None) -> MergeSummary:
     table_reg = book.state.load("tables")
 
     # Idempotency: drop this chapter's previous contributions before re-adding.
+    # Crop boxes are manual/expensive decisions, so carry them across re-merges.
+    preserved_crops = {
+        figure_id: (entry.get("crop"), entry.get("crop_source"))
+        for figure_id, entry in figure_reg["figures"].items()
+        if figure_id.startswith(f"fig{chapter_num}-")
+        and isinstance(entry, dict) and entry.get("crop")
+    }
     _drop_chapter_entries(formula_reg, chapter_num)
     for figure_id in [key for key in figure_reg["figures"]
                       if key.startswith(f"fig{chapter_num}-")]:
@@ -520,6 +537,20 @@ def merge_chapter(book: Book, chapter: str, telemetry=None) -> MergeSummary:
         section_texts[target] = (
             section_texts[target].rstrip() + "\n\n" + definition + "\n")
 
+    # Restore crop boxes captured before the chapter's figure entries were
+    # reset; the image files themselves are left untouched.
+    for figure_id, (crop, source) in preserved_crops.items():
+        entry = figure_reg["figures"].get(figure_id)
+        if entry is not None:
+            entry["crop"] = crop
+            if source:
+                entry["crop_source"] = source
+
+    # Give statements, figures and bibliography entries stable ids before the
+    # files are written; the model emits links to these but not the targets.
+    for filename, text in list(section_texts.items()):
+        section_texts[filename], _ = add_anchors(text)
+
     # Write the manuscript files.
     output_dir = book.manuscript_dir / chapter
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -529,6 +560,8 @@ def merge_chapter(book: Book, chapter: str, telemetry=None) -> MergeSummary:
         warnings.append("no chapter title found (no '# Chapter' line)")
     for filename, text in section_texts.items():
         (output_dir / filename).write_text(text, encoding="utf-8")
+    if resolve:
+        _resolve_manuscript_links(book, only_dir=output_dir)
 
     book.state.save("formulas", formula_reg)
     book.state.save("figures", figure_reg)
@@ -561,9 +594,36 @@ def merge_chapter(book: Book, chapter: str, telemetry=None) -> MergeSummary:
     return summary
 
 
+def _resolve_manuscript_links(book: Book, *, only_dir: Path | None = None) -> int:
+    """Rewrite dangling links to existing anchors across the merged manuscript.
+
+    ``only_dir`` restricts writes to one chapter (``merge --chapter`` must not
+    touch files outside its scope); the anchor index is still built from the
+    whole manuscript so links to other chapters resolve.
+    """
+    files = sorted(book.manuscript_dir.rglob("*.md"))
+    texts = {path: path.read_text(encoding="utf-8") for path in files}
+    ids: set[str] = set()
+    entries = []
+    for text in texts.values():
+        ids |= anchor_ids(text)
+        if "# References" in text:
+            entries.extend(parse_reference_entries(text))
+    fixed = 0
+    for path, text in texts.items():
+        if only_dir is not None and path.parent != only_dir:
+            continue
+        updated, count = resolve_links(text, ids, entries)
+        if count:
+            path.write_text(updated, encoding="utf-8")
+            fixed += count
+    return fixed
+
+
 def merge_book(book: Book, telemetry=None) -> dict[str, MergeSummary]:
-    """Merge every chapter."""
+    """Merge every chapter, then resolve cross-chapter links once."""
     summaries = {}
     for chapter in book.chapters():
-        summaries[chapter] = merge_chapter(book, chapter, telemetry)
+        summaries[chapter] = merge_chapter(book, chapter, telemetry, resolve=False)
+    _resolve_manuscript_links(book)
     return summaries

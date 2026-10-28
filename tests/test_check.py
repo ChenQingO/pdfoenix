@@ -175,3 +175,34 @@ def test_reference_anchors_are_global(tmp_path):
     (references / "references.md").write_text(
         "::: {#ref-x-1999 .ref-entry}\nX (1999).\n:::\n", encoding="utf-8")
     assert "link" not in kinds(check_book(book))
+
+
+def test_inline_span_anchors_resolve_links(tmp_path):
+    files = {
+        "00_chapter.md": "# Chapter 3. T {#ch-3}\n",
+        "sec3-1.md": (
+            "## 3.1 Intro {#sec-3-1}\n\n"
+            "See [Theorem 3.1.1](#thm-3-1-1).\n\n"
+            "<span id=\"thm-3-1-1\"></span>**Theorem 3.1.1.** *A statement.*\n"),
+    }
+    report = check_book(make(tmp_path, files))
+    assert "link" not in kinds(report)
+
+
+def test_duplicate_anchor_ids_are_reported(tmp_path):
+    files = {
+        "00_chapter.md": "# Chapter 3. T {#ch-3}\n",
+        "sec3-1.md": "## 3.1 Intro {#sec-3-1}\n\n<span id=\"dup\"></span>x\n",
+        "sec3-2.md": "## 3.2 Methods {#sec-3-2}\n\n<span id=\"dup\"></span>y\n",
+    }
+    report = check_book(make(tmp_path, files))
+    assert "anchor_duplicate" in kinds(report)
+
+
+def test_unresolved_figure_placeholder_is_reported(tmp_path):
+    files = {
+        "00_chapter.md": "# Chapter 3. T {#ch-3}\n",
+        "sec3-1.md": "## 3.1 Intro {#sec-3-1}\n\n<!-- FIGURE 3.1 -->\n",
+    }
+    report = check_book(make(tmp_path, files))
+    assert "object_placeholder" in kinds(report)
