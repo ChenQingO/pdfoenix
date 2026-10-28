@@ -94,11 +94,8 @@ def init_book(tmp_path):
 
 def test_cli_smoke_commands(tmp_path, monkeypatch, capsys):
     root = init_book(tmp_path)
-    assert main(["-C", str(root), "scout"]) == 0
-    assert main(["-C", str(root), "render", "--pages", "1-3"]) == 0
     assert main(["-C", str(root), "report", "risk"]) == 0
     assert main(["-C", str(root), "report", "cost"]) == 0
-    assert main(["-C", str(root), "assets"]) == 0
     assert main(["-C", str(root), "check"]) == 0
     assert main(["-C", str(root), "watch", "--once"]) == 0
 
@@ -115,7 +112,6 @@ def test_cli_smoke_commands(tmp_path, monkeypatch, capsys):
 
 def test_cli_transcribe_merge_verify(tmp_path, monkeypatch):
     root = init_book(tmp_path)
-    assert main(["-C", str(root), "scout"]) == 0
     fake = FakeTranscriber()
     monkeypatch.setattr("pdfoenix.pipeline.make_transcriber",
                         lambda _book, _telemetry: fake)
@@ -164,7 +160,6 @@ class RecordingTranscriber(FakeTranscriber):
 
 def test_cli_transcribe_pages_selection(tmp_path, monkeypatch):
     root = init_book(tmp_path)
-    assert main(["-C", str(root), "scout"]) == 0
 
     def factory(_book, telemetry):
         return RecordingTranscriber(telemetry)
@@ -179,7 +174,6 @@ def test_cli_transcribe_pages_selection(tmp_path, monkeypatch):
 
 def test_cli_verify_pages(tmp_path, monkeypatch):
     root = init_book(tmp_path)
-    assert main(["-C", str(root), "scout"]) == 0
 
     def factory(_book, telemetry):
         return RecordingTranscriber(telemetry)
@@ -199,8 +193,8 @@ def test_cli_verify_pages(tmp_path, monkeypatch):
 
 
 # ── Argument surface (uniformity rules) ─────────────────────────────────
-PIPELINE_COMMANDS = ("init", "scout", "render", "transcribe", "merge", "assets",
-                     "verify", "check", "build", "inspect")
+PIPELINE_COMMANDS = ("init", "transcribe", "merge", "verify", "check",
+                     "build", "inspect")
 
 
 @pytest.mark.parametrize("command", (*PIPELINE_COMMANDS, "watch", "report", "expt"))
@@ -233,7 +227,7 @@ def test_scope_and_force_flags_are_uniform():
     from pdfoenix.cli import _build_parser
 
     parser = _build_parser()
-    for command in ("render", "transcribe", "verify"):
+    for command in ("transcribe", "verify"):
         args = parser.parse_args([command, "--pages", "1-3", "--force"])
         assert args.pages == "1-3" and args.force
     for command in ("transcribe", "merge", "verify"):
@@ -266,3 +260,87 @@ def test_verify_audit_and_expt_flag_wiring():
     assert args.message == "note" and args.force
     assert parser.parse_args(["report", "quality", "--all"]).all
     assert parser.parse_args(["report", "cost", "--by", "chapter"]).by == "chapter"
+
+
+class FlakyTranscriber(FakeTranscriber):
+    """Fails the first verify call with a contract error, then succeeds."""
+
+    def __init__(self):
+        super().__init__()
+        self.attempts = 0
+
+    def verify(self, images, content):
+        self.attempts += 1
+        if self.attempts == 1:
+            from pdfoenix.transcribe.opencode import OpenCodeError
+
+            raise OpenCodeError("model returned tool-call markup instead of text")
+        return super().verify(images, content)
+
+
+def test_cli_verify_chunks_retries_and_persists_each_chunk(tmp_path, monkeypatch):
+    root = init_book(tmp_path)
+    config = root / "config.toml"
+    config.write_text(config.read_text(encoding="utf-8")
+                      + "\n[pipeline]\nverify_chunk_size = 1\n"
+                        "\n[transcriber]\nretry_delay = 0\n",
+                      encoding="utf-8")
+
+    fake = FlakyTranscriber()
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber",
+                        lambda _book, _telemetry: fake)
+
+    assert main(["-C", str(root), "transcribe"]) == 0
+    assert main(["-C", str(root), "verify", "--pages", "1-3"]) == 0
+
+    # 3 one-page chunks; the first chunk failed once and was retried.
+    assert fake.attempts == 4
+    progress = Book(root).state.load("progress")["units"]
+    for page in (1, 2, 3):
+        assert progress[f"verify/p{page}"]["status"] == "done"
+    for unit in ("verify/ch01/p1", "verify/ch01/p2", "verify/ch01/p3"):
+        assert progress[unit]["status"] == "done"
+        assert progress[unit]["pages"] == [int(unit.rsplit("p", 1)[1])]
+
+
+class TruncatedTranscriber(FakeTranscriber):
+    """Returns only page 1 for a three-page window."""
+
+    def transcribe(self, images, task):
+        self.transcribe_calls.append((images, task))
+        return "<!-- page:1 -->\n\nOnly the first page.\n"
+
+
+def test_transcribe_gate_rejects_invalid_batch_and_leaves_no_file(tmp_path, monkeypatch):
+    root = init_book(tmp_path)
+    config = root / "config.toml"
+    config.write_text(config.read_text(encoding="utf-8")
+                      + "\n[transcriber]\nattempts = 2\nretry_delay = 0\n",
+                      encoding="utf-8")
+
+    fake = TruncatedTranscriber()
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber",
+                        lambda _book, _telemetry: fake)
+
+    assert main(["-C", str(root), "transcribe"]) == 2
+    assert len(fake.transcribe_calls) == 2
+    target = root / "working" / "batches" / "ch01" / "p1-3.md"
+    assert not target.exists()
+    progress = Book(root).state.load("progress")["units"]
+    entry = progress["transcribe/ch01/p1-3"]
+    assert entry["status"] == "failed"
+    assert "anchor-missing" in entry["error"]
+
+
+def test_cli_doctor_reports_batch_anchor_problems(tmp_path, capsys):
+    root = init_book(tmp_path)
+    directory = root / "working" / "batches" / "ch01"
+    directory.mkdir(parents=True)
+    (directory / "p1-3.md").write_text(
+        "text before anchor<!-- page:1 -->\n\n"
+        "<!-- page:2 -->\n\n<!-- page:3 -->\n", encoding="utf-8")
+
+    assert main(["-C", str(root), "check", "--all"]) == 1
+    out = capsys.readouterr().out
+    assert "must sit on its own line" in out
+    assert "doctor:" in out

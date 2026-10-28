@@ -17,6 +17,8 @@ verify_chunk_size = 5
 
 [transcriber]
 timeout = 3600
+attempts = 3
+retry_delay = 2.0
 
 # Model wiring: the pair behind the two billed agents.  Combo 1 is the
 # benchmark's value sweet spot and ships by default.  Add combos by hand —

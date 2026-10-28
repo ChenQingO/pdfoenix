@@ -28,6 +28,8 @@ DEFAULT_CONFIG = {
     },
     "transcriber": {
         "timeout": 3600,           # per-process timeout in seconds
+        "attempts": 3,             # tries per verification chunk on transient failures
+        "retry_delay": 2.0,        # seconds before the next try (linear backoff)
     },
     "sampling": {
         "strategy": "risk_distribution",
@@ -133,6 +135,15 @@ def validate_config(cfg: dict) -> None:
     if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
             or timeout <= 0):
         raise ConfigError("transcriber.timeout must be a positive number")
+
+    attempts = cfg["transcriber"]["attempts"]
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts <= 0:
+        raise ConfigError("transcriber.attempts must be a positive integer")
+
+    retry_delay = cfg["transcriber"]["retry_delay"]
+    if (not isinstance(retry_delay, (int, float)) or isinstance(retry_delay, bool)
+            or retry_delay < 0):
+        raise ConfigError("transcriber.retry_delay must be a non-negative number")
 
     _validate_expt(cfg.get("expt", {}))
 

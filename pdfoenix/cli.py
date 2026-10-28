@@ -6,8 +6,8 @@ returns an exit code.  It never keeps pipeline state in memory across commands.
 
 Command groups
 --------------
-* pipeline stages: ``init scout render transcribe merge assets verify check
-  build inspect`` — plain verbs, one stage each;
+* pipeline stages: ``init transcribe merge verify check build inspect`` —
+  plain verbs, one outcome each;
 * status: ``watch`` (read-only dashboard);
 * reports: ``report cost|quality|risk`` (read-only analysis);
 * experiments: ``expt show|run`` (only ``run`` spends money).
@@ -24,12 +24,14 @@ Cross-cutting rules (documented in the README handbook):
 """
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from pdfoenix import combo as combo_mod
 from pdfoenix import expt as expt_mod
 from pdfoenix import pipeline
 from pdfoenix.assets.crop import crop_figures
+from pdfoenix.core.batches import validate_batch_text
 from pdfoenix.core.book import Book
 from pdfoenix.core.build import build_book
 from pdfoenix.core.check import check_book
@@ -38,11 +40,13 @@ from pdfoenix.core.pages import batch_ranges, parse_pages
 from pdfoenix.core.render import render_pages
 from pdfoenix.core.scout import scout_book
 from pdfoenix.display import print_table
+from pdfoenix.doctor import collect_findings
 from pdfoenix.inspect import inspect_epub
-from pdfoenix.report import format_risk_report, risk_report, summarize_costs
+from pdfoenix.report import chapter_for_unit, format_risk_report, risk_report, summarize_costs
 from pdfoenix.scaffold import scaffold_book
+from pdfoenix.transcribe.opencode import OpenCodeError
 from pdfoenix.verify.audit import apply_hits, global_audit
-from pdfoenix.verify.content import content_for_pages
+from pdfoenix.verify.content import content_for_pages, plan_verify
 from pdfoenix.verify.sampling import compute_page_risks, sample_pages
 from pdfoenix.watch import watch as run_watch
 
@@ -79,28 +83,22 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="overwrite existing scaffold files")
     init.set_defaults(func=cmd_init)
 
-    scout = sub.add_parser("scout", help="scan the PDF text layer into state/scout.json")
-    scout.set_defaults(func=cmd_scout)
-
-    render = sub.add_parser("render", help="render transcription pages at render_dpi")
-    _add_scope(render, pages=True)
-    _add_force(render, "re-render existing page images")
-    render.set_defaults(func=cmd_render)
-
     transcribe = sub.add_parser("transcribe", help="transcribe page batches")
     _add_scope(transcribe, pages=True)
     _add_force(transcribe, "redo existing batches")
+    transcribe.add_argument("--rescan", action="store_true",
+                            help="rebuild the chapter layout cache first")
+    transcribe.add_argument("--rerender", action="store_true",
+                            help="re-render selected page images first")
     transcribe.set_defaults(func=cmd_transcribe)
 
     merge = sub.add_parser("merge", help="merge batches into the manuscript")
     _add_scope(merge)
+    merge.add_argument("--no-assets", action="store_true",
+                       help="skip figure cropping after the merge")
+    merge.add_argument("--recrop", action="store_true",
+                       help="crop existing figures again")
     merge.set_defaults(func=cmd_merge)
-
-    assets = sub.add_parser("assets", help="crop registered figures")
-    _add_force(assets, "overwrite existing crops")
-    assets.add_argument("--no-auto", action="store_true",
-                        help="do not auto-detect missing crop boxes")
-    assets.set_defaults(func=cmd_assets)
 
     verify = sub.add_parser("verify", help="sample and verify transcribed pages")
     _add_scope(verify, pages=True)
@@ -112,6 +110,8 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.set_defaults(func=cmd_verify)
 
     check = sub.add_parser("check", help="validate the manuscript")
+    check.add_argument("--all", action="store_true",
+                       help="also audit batches, figures, progress and link targets")
     check.set_defaults(func=cmd_check)
 
     build = sub.add_parser("build", help="assemble Markdown and build the EPUB")
@@ -190,29 +190,12 @@ def cmd_init(args) -> int:
     return 0
 
 
-def cmd_scout(args) -> int:
-    book = _book(args)
-    data = scout_book(book)
-    print(f"scout: {len(data['chapters'])} chapters, {len(data['sections'])} sections, "
-          f"{len(data['figures'])} figures, {len(data['tables'])} tables")
-    return 0
-
-
-def cmd_render(args) -> int:
-    book = _book(args)
-    total = book.pdf_page_count()
-    pages = parse_pages(args.pages, total) if args.pages else list(range(1, total + 1))
-    missing = [page for page in pages
-               if args.force or not book.page_image(page).exists()]
-    if missing:
-        render_pages(book.pdf(), missing, book.config["pipeline"]["render_dpi"],
-                     book.pages_dir)
-    print(f"rendered {len(missing)} page(s); {len(pages)} selected")
-    return 0
 
 
 def cmd_transcribe(args) -> int:
     book = _book(args)
+    if getattr(args, "rescan", False):
+        scout_book(book)
     ranges = pipeline.ensure_chapter_ranges(book)
     if args.chapter:
         ranges = {name: value for name, value in ranges.items() if name == args.chapter}
@@ -221,7 +204,15 @@ def cmd_transcribe(args) -> int:
     wanted = set(parse_pages(args.pages, book.pdf_page_count())) if args.pages else None
     if wanted is not None and not wanted:
         raise ValueError(f"no pages match: {args.pages}")
+    if getattr(args, "rerender", False):
+        pages = sorted(wanted) if wanted is not None else [
+            page for start, end in ranges.values()
+            for page in range(start, end + 1)]
+        render_pages(book.pdf(), pages,
+                     book.config["pipeline"]["render_dpi"], book.pages_dir)
     size = book.config["pipeline"]["batch_pages"]
+    attempts = int(book.config["transcriber"]["attempts"])
+    delay = float(book.config["transcriber"]["retry_delay"])
     telemetry = pipeline.production_ledger(book)
     transcriber = pipeline.make_transcriber(book, telemetry)
     done = 0
@@ -235,23 +226,51 @@ def cmd_transcribe(args) -> int:
                 if target.exists() and not args.force:
                     continue
                 unit = target.stem
+                agent = f"{chapter}/{unit}"
                 telemetry.emit_event("dispatch", stage="transcribe",
                                      chapter=chapter, unit=unit)
-                telemetry.emit_event("agent_start", agent=f"{chapter}/{unit}")
-                try:
-                    text = pipeline.transcribe_window(
-                        book, transcriber, first=first, last=last, chapter=chapter)
-                except Exception:
-                    telemetry.emit_event("agent_fail", agent=f"{chapter}/{unit}")
-                    pipeline.set_progress(book, f"transcribe/{chapter}/{unit}",
-                                          status="failed", path=str(target))
-                    raise
-                target.write_text(text.rstrip() + "\n", encoding="utf-8")
-                telemetry.emit_event("agent_done", agent=f"{chapter}/{unit}")
-                pipeline.set_progress(book, f"transcribe/{chapter}/{unit}",
-                                      status="done", path=str(target))
-                done += 1
-                print(f"transcribed {chapter}/{target.name}")
+                telemetry.emit_event("agent_start", agent=agent)
+                failure = None
+                for attempt in range(1, attempts + 1):
+                    try:
+                        text = pipeline.transcribe_window(
+                            book, transcriber, first=first, last=last,
+                            chapter=chapter)
+                        candidate = text.rstrip() + "\n"
+                        issues = validate_batch_text(
+                            candidate, first, last,
+                            location=f"{chapter}/{target.name}")
+                    except OpenCodeError as exc:
+                        failure = str(exc)
+                    else:
+                        errors = [issue for issue in issues
+                                  if issue.severity == "error"]
+                        if not errors:
+                            target.write_text(candidate, encoding="utf-8")
+                            telemetry.emit_event("agent_done", agent=agent)
+                            pipeline.set_progress(
+                                book, f"transcribe/{chapter}/{unit}",
+                                status="done", path=str(target))
+                            done += 1
+                            print(f"transcribed {chapter}/{target.name}")
+                            break
+                        failure = "; ".join(
+                            f"{issue.kind} {issue.location}: {issue.message}"
+                            for issue in errors)
+                    if attempt < attempts:
+                        telemetry.emit_event(
+                            "agent_retry", agent=agent, attempt=attempt,
+                            error=failure)
+                        if delay > 0:
+                            time.sleep(delay * attempt)
+                else:
+                    telemetry.emit_event("agent_fail", agent=agent,
+                                         error=failure)
+                    pipeline.set_progress(
+                        book, f"transcribe/{chapter}/{unit}", status="failed",
+                        path=str(target), error=failure)
+                    raise ValueError(
+                        f"transcription failed validation for {agent}: {failure}")
     finally:
         _close(transcriber)
         telemetry.close()
@@ -276,11 +295,23 @@ def cmd_merge(args) -> int:
               f"{summary.tables} tables")
         for warning in summary.warnings:
             print(f"  warning: {warning}")
+
+    if not args.no_assets:
+        crops = crop_figures(book, force=args.recrop, chapter=args.chapter)
+        if crops.cropped or crops.warnings:
+            print(f"assets: cropped {len(crops.cropped)}, "
+                  f"skipped {len(crops.skipped)}, "
+                  f"{len(crops.warnings)} warning(s)")
+            for warning in crops.warnings:
+                print(f"  warning: {warning}")
     return 0
 
 
 def cmd_verify(args) -> int:
     book = _book(args)
+    if not any(book.manuscript_dir.glob("ch*")):
+        print("warning: no merged manuscript; run 'pdfoenix merge' first "
+              "(sampling cannot use formula risk and the audit scans nothing)")
     selected = _verify_pages(book, args)
     if not selected:
         print("no pages selected for verification")
@@ -293,25 +324,52 @@ def cmd_verify(args) -> int:
         missing = sorted(set(selected) - set(kept))
         print(f"warning: no batch content for pages {missing}; skipping them")
     images = pipeline.verify_images(book, kept, force=args.force)
+    chunks = plan_verify(images, content,
+                         int(book.config["pipeline"]["verify_chunk_size"]))
+    ranges = pipeline.ensure_chapter_ranges(book)
+    attempts = int(book.config["transcriber"]["attempts"])
+    delay = float(book.config["transcriber"]["retry_delay"])
 
     telemetry = pipeline.production_ledger(book)
     transcriber = pipeline.make_transcriber(book, telemetry)
-    telemetry.emit_event("dispatch", stage="verify", unit=f"p{kept[0]}-{kept[-1]}")
-    telemetry.emit_event("agent_start", agent="verify")
+    pipeline.clear_verify_plan(book)
+
+    plan = []
+    for chunk in chunks:
+        chapter = chapter_for_unit(chunk.unit_id, ranges)
+        unit = f"verify/{chapter}/{chunk.unit_id}"
+        pipeline.set_progress(book, unit, status="pending", pages=chunk.pages)
+        plan.append((unit, chunk))
+
+    verified = corrections_count = 0
     try:
-        corrections = transcriber.verify(images, content)
-    except Exception:
-        telemetry.emit_event("agent_fail", agent="verify")
-        raise
-    else:
-        telemetry.emit_event("agent_done", agent="verify")
-        pipeline.save_corrections(book, telemetry, corrections)
-        for page in kept:
-            pipeline.set_progress(book, f"verify/p{page}", status="done")
-        print(f"verified {len(kept)} page(s); {len(corrections)} correction(s)")
+        for unit, chunk in plan:
+            telemetry.emit_event("dispatch", stage="verify", unit=unit)
+            telemetry.emit_event("agent_start", agent=unit)
+            pipeline.set_progress(book, unit, status="running", pages=chunk.pages)
+            try:
+                corrections = _verify_chunk_with_retries(
+                    transcriber, chunk, unit=unit, attempts=attempts,
+                    delay=delay, telemetry=telemetry)
+            except Exception as exc:
+                telemetry.emit_event("agent_fail", agent=unit, error=str(exc))
+                pipeline.set_progress(book, unit, status="failed", pages=chunk.pages)
+                raise
+            telemetry.emit_event("agent_done", agent=unit)
+            pipeline.save_corrections(book, telemetry, corrections)
+            for page in chunk.pages:
+                pipeline.set_progress(book, f"verify/p{page}", status="done")
+            pipeline.set_progress(book, unit, status="done", pages=chunk.pages)
+            verified += len(chunk.pages)
+            corrections_count += len(corrections)
+            print(f"verified {unit} ({len(chunk.pages)} page(s), "
+                  f"{len(corrections)} correction(s))")
     finally:
         _close(transcriber)
         telemetry.close()
+
+    print(f"verified {verified} page(s) in {len(plan)} batch(es); "
+          f"{corrections_count} correction(s)")
 
     audit = args.audit or ("dry" if book.config["review"].get("global_audit", True)
                            else "off")
@@ -320,23 +378,32 @@ def cmd_verify(args) -> int:
     return 0
 
 
-def cmd_assets(args) -> int:
-    book = _book(args)
-    summary = crop_figures(book, force=args.force, auto=not args.no_auto)
-    print(f"cropped {len(summary.cropped)}, skipped {len(summary.skipped)}, "
-          f"{len(summary.warnings)} warning(s)")
-    for warning in summary.warnings:
-        print(f"  warning: {warning}")
-    return 0
-
 
 def cmd_check(args) -> int:
     book = _book(args)
     report = check_book(book)
+    doctor_errors = 0
+    if args.all:
+        findings = collect_findings(book)
+        # Manuscript link suggestions are extra information; plain dangling
+        # links are already reported by check_book below.
+        shown = [finding for finding in findings
+                 if finding.area in {"batch", "figure", "progress"}
+                 or (finding.area == "link"
+                     and ("resolvable as" in finding.message
+                          or "candidates:" in finding.message))]
+        for finding in shown:
+            print(f"{finding.severity}: {finding.area}: {finding.location}: "
+                  f"{finding.message}")
+        doctor_errors = sum(1 for finding in findings
+                            if finding.severity == "error")
     for issue in report.issues:
         print(f"{issue.severity}: {issue.location}: {issue.message}")
+    if args.all:
+        print(f"doctor: {doctor_errors} error(s)")
     print(f"check: {len(report.issues)} issue(s), {report.footnotes} footnote(s)")
-    return 0 if report.ok else 1
+    return 0 if report.ok and doctor_errors == 0 else 1
+
 
 
 def cmd_build(args) -> int:
@@ -453,6 +520,14 @@ def _write_task_file(book: Book, chapter: str, start: int, end: int) -> None:
 
 def _verify_pages(book: Book, args) -> list[int]:
     risks = compute_page_risks(book)
+    if not risks and not args.pages:
+        # Sampling is page-image based; transcribe normally rendered them, but
+        # verify must stay usable after a cache wipe now that render is internal.
+        ranges = pipeline.ensure_chapter_ranges(book)
+        pages = [page for start, end in ranges.values()
+                 for page in range(start, end + 1)]
+        pipeline.render_missing(book, pages)
+        risks = compute_page_risks(book)
     if args.pages:
         selected = parse_pages(args.pages, book.pdf_page_count())
     elif args.full:
@@ -468,6 +543,28 @@ def _verify_pages(book: Book, args) -> list[int]:
         done = pipeline.verified_pages(book)
         selected = [page for page in selected if page not in done]
     return selected
+
+
+def _verify_chunk_with_retries(transcriber, chunk, *, unit: str, attempts: int,
+                               delay: float, telemetry):
+    """Verify one page chunk, retrying transient model/network failures.
+
+    Each attempt is its own billed call and is recorded in the ledger by the
+    adapter; ``agent_retry`` events make the retries visible in ``watch``.
+    """
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return transcriber.verify(list(chunk.images), chunk.content)
+        except OpenCodeError as exc:
+            last = exc
+            if attempt >= attempts:
+                break
+            telemetry.emit_event("agent_retry", agent=unit, attempt=attempt,
+                                 error=str(exc))
+            if delay > 0:
+                time.sleep(delay * attempt)
+    raise last
 
 
 def _run_audit(book: Book, *, apply: bool) -> None:

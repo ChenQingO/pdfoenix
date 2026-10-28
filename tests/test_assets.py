@@ -136,3 +136,18 @@ def test_render_verify_pages_is_cached_and_ordered(tmp_path):
 
     forced = render_verify_pages(book, [2], force=True)
     assert forced == [paths[0]]
+
+
+def test_crop_figures_can_be_limited_to_one_chapter(tmp_path):
+    book, _ = make_book(tmp_path, crop=[0.2, 0.4, 0.8, 0.7])
+
+    def add_second(data):
+        data["figures"]["fig2-1"] = {
+            "file": "figures/fig2-1.png", "caption": "Figure 2.1.",
+            "description": "", "page": 1, "crop": [0.2, 0.4, 0.8, 0.7]}
+
+    book.state.update("figures", add_second)
+    summary = crop_figures(book, dpi=100, chapter="ch01")
+    assert summary.cropped == ["fig1-1"]
+    assert (tmp_path / "figures" / "fig1-1.png").exists()
+    assert not (tmp_path / "figures" / "fig2-1.png").exists()

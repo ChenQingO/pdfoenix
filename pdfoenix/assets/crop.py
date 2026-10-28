@@ -78,11 +78,14 @@ def crop_figures(
     dpi: int = DEFAULT_FIGURE_DPI,
     force: bool = False,
     auto: bool = True,
+    chapter: str | None = None,
 ) -> CropSummary:
     """Crop every registered figure that does not have an image yet.
 
     Existing files are skipped unless ``force`` is true.  ``auto=False`` makes a
     missing ``crop`` entry a warning instead of triggering detection.
+    ``chapter`` restricts the pass to that chapter's figures, so
+    ``merge --chapter`` never touches another chapter's assets.
     """
     registry = book.state.load("figures")
     entries = registry.get("figures", {})
@@ -90,10 +93,17 @@ def crop_figures(
     if not entries:
         return summary
 
+    prefix = None
+    if chapter:
+        match = re.search(r"(\d+)", chapter)
+        prefix = f"fig{int(match.group(1))}-" if match else None
+
     changed = False
     doc = fitz.open(book.pdf())
     try:
         for figure_id, entry in entries.items():
+            if prefix and not figure_id.startswith(prefix):
+                continue
             if not isinstance(entry, dict):
                 summary.warn(figure_id, "registry entry is not an object")
                 continue
