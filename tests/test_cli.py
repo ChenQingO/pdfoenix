@@ -1,7 +1,7 @@
 """CLI orchestration tests (TDD)."""
 import zipfile
 
-import fitz
+import pymupdf as fitz
 import pytest
 
 from pdfoenix.cli import main

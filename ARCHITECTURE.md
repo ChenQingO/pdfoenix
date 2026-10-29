@@ -5,6 +5,8 @@
 > 状态：v0.2 实施完成（2026-10-22）：内核、模型、资产、复核、预设、CLI、看板与首轮标定均已落地。
 > v0.3 重构完成（2026-10-24）：命令面分组统一（流水线 / 报告 / 实验），
 > `expt.py` 拆出 `combo.py`（模型组合）与 `pipeline.py`（共享编排），死代码与废配置清除。
+> v0.4.0（2026-10-29）：数学门禁（`core/mathlint.py`）接入 transcribe/check；
+> `init` 刷新现有书 preset；发布工程补齐（AGPL-3.0、CI、示例书、协作文件）。
 
 ---
 
@@ -48,15 +50,16 @@ pdfoenix/                       # 源代码区（包）
 │   ├── pages.py                #   页选择/批次规划/页锚点与命名约定（唯一来源）
 │   ├── telemetry.py            #   SQLite 成本账本
 │   ├── risk.py                 #   复杂度风险分（纯字符串分析）
+│   ├── mathlint.py             #   数学门禁：安全方言归一化 + texmath 校验
 │   ├── scout.py                #   侦察：章/节/图/表/公式结构 → state/scout.json
 │   ├── render.py               #   页渲染（整页/区域）→ working/pages/
 │   ├── merge.py                #   合并：页锚点→state、切节路由、公式/图/表注册
-│   ├── check.py                #   自动校验（编号/脚注/链接/残留/注册表/对象）
+│   ├── check.py                #   自动校验（编号/脚注/链接/残留/注册表/对象/数学）
 │   ├── build.py                #   拼装（目录/表内联）→ pandoc → EPUB
 │   └── postprocess.py          #   EPUB 后处理（脚注章末化、nav 移出 spine）
 ├── transcribe/                 # 模型层（唯二含 LLM 的地方之一）
 │   ├── protocol.py             #   Transcriber / Verifier 协议 + 输出契约（见 §8）
-│   └── opencode.py             #   OpenCodeTranscriber（npx 本地，见 §8）
+│   └── opencode.py             #   OpenCodeTranscriber（本地 CLI，见 §8）
 ├── verify/                     # 复核层（抽样/审计；LLM 调用经 Transcriber.verify）
 │   ├── sampling.py             #   分布驱动抽样策略（可插拔）
 │   ├── content.py              #   从批次恢复“页→转写文本”供复核
@@ -133,8 +136,8 @@ pdfoenix init <book> --pdf a.pdf [--combo ID ...]   # 脚手架 + config + 预�
 pdfoenix transcribe [--chapter|--pages]   # 分页批转写（自动侦察/渲染，写盘校验）
 pdfoenix merge [--chapter] [--no-assets|--recrop]  # 合并 + 锚点/链接 + 裁图
 pdfoenix verify [--chapter|--pages|--full] [--audit off|dry|apply]
-pdfoenix check [--all]                    # manuscript 校验；--all 连批次/图/进度
-pdfoenix build [--out book.epub]          # pandoc → EPUB + 后处理
+pdfoenix check [--all]                    # manuscript 校验（含数学门禁）；--all 连批次/图/进度
+pdfoenix build [--out book.epub]          # pandoc → EPUB + 后处理（不做内容校验）
 pdfoenix inspect [EPUB]                   # EPUB 验收抽查
 
 # 状态（只读）
@@ -153,6 +156,13 @@ pdfoenix expt run  [--batch N] [--combo ID ...] [--all] [-m 备注] [--force]
 **编排器（cli.py）**：普通确定性 Python 主程序——读 `state/progress.json` 判断「做到哪了」，只做没做的单元；调确定性脚本直接调，LLM 那两处经 `Transcriber` 接口**阻塞调用** opencode；每一步结果落盘。真相与顺序在编排器 + 文件里，opencode 只是被按批召唤的执行体，适配器内部负责并行 fan-out。
 共享的单元操作（渲染补缺、转写窗口、复核页图、进度、纠错落账）在 `pipeline.py`，
 CLI 与实验跑批共用，两个编排器因此不会漂移。
+
+**数学门禁**：`core/mathlint.py` 是唯一实现。转写批次与整章流用它做早筛；
+`check` 用它做书稿终检。安全的 MathML 方言替换（`\Bigm` → `\Big`、双反斜杠）
+由 `check` 原子写回源文件；其余问题（缺参数、缺 `$`、花括号/环境不平衡、
+texmath 无法渲染）都是 `check` 的 error。`build` 不调用它，只负责生成 EPUB。
+`init` 对已存在的书目录刷新文本 preset（任务书/单价/配置参考），不改 CSS、
+配置、书稿与状态。
 
 ## 6. 对象模型：图 / 表 / 公式
 
@@ -224,7 +234,7 @@ class Correction:
 ```
 
 **OpenCodeTranscriber（官方唯一实现）**：
-- 用 `npx opencode`（项目本地安装，便于编辑 `opencode.jsonc` 指定模型/agent/思考档）。
+- 用已安装的 `opencode` CLI（`npm install -g @opencode/cli`；项目配置指定模型/agent/思考档）。
 - 单次（one-shot）headless 调用：一个 prompt 进、一个结果出，无多轮对话；批量 fan-out 在适配器内部并行。
 - `transcribe` 默认批大小 4–6 页/次；`verify` 默认 chunk_size ≈ 5 页/次（见 §9）。
 - 调用可失败（额度/超时）：编排器按单元重试，状态落盘。
@@ -414,7 +424,7 @@ active = 1
    - 真实数据回归（`books/an_introduction`，复制到临时目录，不动已验证书稿）：ch03/04/05/06/07/09 的编号公式总数与现有书稿**逐一相等**；ch09 全量 113 条公式、Table 9.1 抽取、页映射 113/113。
    - 已知遗留差异（非内核 bug）：ch02 用旧格式 `**PROBLEMS**` 标题（新转录统一 `## Problems`）；ch08 现有 `sec8-9.md` 缺一段 9 条公式的证明（批次里有，新 merge 忠实收录，**反证现有书稿该处有漏**）。
 3. [x] **模型层**（2026-10-22）：`transcribe/protocol.py`（Transcriber/Verifier + Correction）、
-   `transcribe/opencode.py`（npx 本地、页批/复核块并行 fan-out、每次调用落成本账本）+
+   `transcribe/opencode.py`（本地 CLI、页批/复核块并行 fan-out、每次调用落成本账本）+
    `presets/{opencode.jsonc,transcribe.md,verify.md}` 全部实现；真实 MiMo 复核冒烟通过。
    - OpenCode v2 以工作目录发现项目配置，故子进程在 `opencode.jsonc` 所在目录运行（图片传绝对路径）；
      agent 全部禁用工具，只用附件看图、stdout 返回文本。

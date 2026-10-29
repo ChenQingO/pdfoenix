@@ -8,7 +8,7 @@ use this map as an initial expectation only, and a human may edit
 import re
 from typing import TypedDict
 
-import fitz
+import pymupdf as fitz
 
 from pdfoenix.core.book import Book
 

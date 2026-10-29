@@ -3,9 +3,12 @@
 The scaffold is deliberately boring: directories, a ``config.toml`` holding
 only the values that differ from the built-in defaults, a copy of every
 preset, and empty state registries.  It is idempotent: rerunning fills missing
-files and never clobbers an existing configuration unless ``force`` is set.
+files, refreshes the text presets so an existing book picks up task-book fixes,
+and never clobbers an existing configuration, manuscript or CSS unless
+``force`` is set.
 """
 import copy
+import os
 import shutil
 from pathlib import Path
 
@@ -13,13 +16,16 @@ from pdfoenix.core.book import Book
 from pdfoenix.core.config import DEFAULT_CONFIG, load_config, write_config
 from pdfoenix.core.state import StateStore
 
-_PRESET_FILES = (
+#: Text presets are refreshed on every ``init`` so an existing book picks up
+#: task-book fixes.  ``epub.css`` is deliberately excluded: styling is owned by
+#: the book and must not change under the user's feet.
+_PRESET_TEXT_FILES = (
     "transcribe.md",
     "verify.md",
     "pricing.toml",
     "config.schema.toml",
-    "epub.css",
 )
+_PRESET_FILES = (*_PRESET_TEXT_FILES, "epub.css")
 _DIRECTORIES = (
     "source",
     "manuscript",
@@ -59,8 +65,11 @@ def scaffold_book(
     for name in _PRESET_FILES:
         source = presets_src / name
         target = presets_dst / name
-        if source.exists() and (force or not target.exists()):
-            shutil.copy2(source, target)
+        if not source.exists():
+            continue
+        refresh = name in _PRESET_TEXT_FILES
+        if force or refresh or not target.exists():
+            _copy_atomic(source, target)
     css_source = presets_src / "epub.css"
     css_target = root / "styles" / "epub.css"
     if css_source.exists() and (force or not css_target.exists()):
@@ -96,6 +105,16 @@ def scaffold_book(
         dangling.write_text(
             "# Anchor ids that are allowed to dangle.\n", encoding="utf-8")
     return Book(root)
+
+
+def _copy_atomic(source: Path, target: Path) -> None:
+    """Copy ``source`` over ``target`` without exposing a partially written file."""
+    temporary = target.with_name(f".{target.name}.tmp")
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _copy_pdf(root: Path, pdf, *, force: bool) -> Path | None:

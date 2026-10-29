@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.render import render_pages, render_region_from_doc

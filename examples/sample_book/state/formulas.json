@@ -1,0 +1,18 @@
+{
+  "formula_to_page": {},
+  "page_to_formulas": {},
+  "formulas": {
+    "eq1-1-1-1": {
+      "number": "(1)",
+      "latex": "x^2 + y^2 = z^2",
+      "risk": 4,
+      "section": "1.1"
+    },
+    "eq1-1-1-2": {
+      "number": null,
+      "latex": "a + b = b + a",
+      "risk": 0,
+      "section": "1.1"
+    }
+  }
+}

@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible defect in pdfoenix
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste API keys, real book PDFs, manuscripts, or EPUBs. Redact paths and reduce
+        the problem to a synthetic example if possible.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the actual behaviour and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Exact commands, a minimal synthetic input, and the relevant log excerpt.
+      placeholder: |
+        pdfoenix -C books/demo check
+        ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pdfoenix version
+      description: Output of `pdfoenix --version` (or the commit hash).
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python, pandoc, OpenCode, and model combo.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmations
+      options:
+        - label: I have removed secrets, real books, and personal data from this report.
+          required: true

@@ -18,6 +18,8 @@ figures, and tables accurate. See [ARCHITECTURE.md](ARCHITECTURE.md) for the ful
 ![uv](https://img.shields.io/badge/uv-package%20manager-8A2BE2)
 ![pandoc](https://img.shields.io/badge/pandoc-EPUB-7a4f1d)
 ![status](https://img.shields.io/badge/status-alpha-orange)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
+![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-green)
 
 ---
 
@@ -55,8 +57,8 @@ PDF
  ├─ transcribe transcribe page by page (auto caches, write gate)
  ├─ merge      merge, anchors/links, crop figures
  ├─ verify     another model reviews a sample of pages
- ├─ check      local validation (`--all` audits batches/figures/progress)
- ├─ build      pandoc assembles the EPUB
+ ├─ check      local rules + math gate (`--all` audits batches/figures/progress)
+ ├─ build      pandoc assembles the EPUB (no content validation)
  └─ inspect    check the EPUB structure
 ```
 
@@ -74,12 +76,14 @@ PDF
 
 > The PDF must carry a **text layer** (used to map the chapter structure). For pure image scans, OCR first,
 > e.g. `ocrmypdf input.pdf output.pdf`.
+>
+> On Windows, run `start.sh` inside WSL; macOS and Linux can run it directly.
 
 ### One-shot environment setup
 
 ```bash
-git clone https://github.com/<your-name>/pdfoenix.git
-cd pdfoenix
+git clone https://github.com/ChenHingO/BooksProject.git
+cd BooksProject
 ./start.sh
 source .venv/bin/activate
 ```
@@ -137,6 +141,21 @@ pdfoenix -C books/my_book inspect
 ```
 
 The artifact lands in `books/my_book/build/book.epub`.
+
+No book at hand? The repository includes a **copyright-free, no-API-key**
+synthetic example:
+
+```bash
+pdfoenix -C examples/sample_book check
+pdfoenix -C examples/sample_book build --out sample.epub
+```
+
+You can also generate a synthetic PDF with a text layer for testing
+`init`/transcription:
+
+```bash
+python examples/make_sample_pdf.py /tmp/pdfoenix-sample.pdf
+```
 
 ### Optional: cover
 
@@ -201,8 +220,9 @@ units** (including refreshing those units' cached inputs, such as page images):
 | 2    | usage error or runtime error                      | all                            |
 
 Read-only commands (**never write files, never spend money**): `watch`, `report cost|quality|risk`,
-`check`, `inspect`, `expt show`. Only two commands call models: `transcribe` and `verify`
-(plus `expt run`).
+`inspect`, `expt show`. `check` applies safe MathML dialect rewrites in place
+(`\Bigm` → `\Big`, doubled backslashes); everything else is report-only.
+Only two commands call models: `transcribe` and `verify` (plus `expt run`).
 
 > Every command supports `pdfoenix <command> --help` for the full option list.
 
@@ -212,7 +232,9 @@ Read-only commands (**never write files, never spend money**): `watch`, `report 
 
 Scaffolding: directory layout, `config.toml` (only values that differ from the defaults),
 presets, empty state registries. `TARGET` is the book directory (falls back to `-C`);
-`--page-offset` encodes `PDF page = printed page + offset`. Model combos are written by hand
+`--page-offset` encodes `PDF page = printed page + offset`. On an existing directory,
+`init` refreshes the text presets (task books, pricing, config reference) but leaves
+`config.toml`, the manuscript, state and CSS untouched. Model combos are written by hand
 in `config.toml` (see [Configuration](#configuration)).
 
 #### `pdfoenix transcribe [--chapter chNN] [--pages SPEC] [--force]`
@@ -270,7 +292,12 @@ ledger.
 Local rule validation: equation numbering continuity, footnote balance, cross links, registry
 consistency, residues (`\tag{}`, bare `■`, `\mathcal`), heading anchors, duplicate anchor ids and
 unresolved FIGURE placeholders. Anchors include both heading attributes (`{#id}`) and
-merge-generated inline spans (`<span id="…">`). Exit code 1 on errors.
+merge-generated inline spans (`<span id="…">`).
+
+Math gate: safe MathML dialect rewrites (`\Bigm` → `\Big`, doubled backslashes) are applied in
+place first, then every formula is checked through pandoc/texmath. Missing arguments or `$`,
+unbalanced braces/environments, and spans texmath cannot render are errors with a `file:line`
+location. Exit code 1 on errors.
 
 `--all` additionally audits batch integrity (missing/duplicate/inline page anchors, restart
 fragments, chapter-stream `$$`/environment balance), dangling-link candidates, figure
@@ -657,7 +684,7 @@ the pipeline has already written.
 ```text
 pdfoenix/          # package source
 ├── core/          # deterministic kernel (no LLM): book/config/state/pages/telemetry/
-│                  #   risk/scout/render/merge/check/build/postprocess
+│                  #   risk/mathlint/scout/render/merge/check/build/postprocess
 ├── combo.py       # model combos: provider/combo config, active combo, opencode config
 │                  #   generation
 ├── pipeline.py    # shared stage operations: render-missing, transcribe windows,
@@ -675,6 +702,9 @@ pdfoenix/          # package source
 └── presets/       # epub.css / opencode.jsonc (agent-skeleton template) / task books /
                    #   pricing / config reference
 tests/             # unit and integration tests
+examples/          # copyright-free sample book and synthetic PDF generator
+.github/           # CI, issue / PR templates
+LICENSE            # AGPL-3.0-or-later
 start.sh           # environment setup script
 ```
 
@@ -691,7 +721,8 @@ pylint --disable=all --enable=duplicate-code pdfoenix
 ```
 
 Conventions: comments and docstrings in English; every module ships with tests; `\tag{}`, bare
-`■`, and anchor-less headings are forbidden.
+`■`, and anchor-less headings are forbidden. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+contribution workflow, the no-real-books rule, and secret handling.
 
 ## Design
 
@@ -700,4 +731,8 @@ the configuration schema is documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
-(TBD)
+[GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later).
+
+AGPL was chosen because the core dependency **PyMuPDF** is dual-licensed under AGPL-3.0 or a
+commercial Artifex license. If you need closed-source distribution, obtain a commercial PyMuPDF
+license or replace it with a license-compatible PDF renderer.

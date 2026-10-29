@@ -26,6 +26,10 @@ books/*/logs/
 *.db-shm
 *.db-wal
 
+# Regenerable example output
+examples/sample_book/build/
+examples/sample_book/working/
+
 # Regenerable working files
 books/*/working/pages/
 books/*/working/verify/

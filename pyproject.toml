@@ -1,19 +1,49 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdfoenix"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Scanned PDF to modern EPUB pipeline"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "ChenHingO" }]
+keywords = ["pdf", "epub", "ocr", "llm", "pandoc", "mathematics", "book"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup",
+]
 dependencies = ["pymupdf>=1.24", "rich>=13"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "pylint>=3"]
 
 [project.scripts]
 pdfoenix = "pdfoenix.cli:main"
 
-[project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "pylint>=3"]
+[project.urls]
+Homepage = "https://github.com/ChenHingO/BooksProject"
+Repository = "https://github.com/ChenHingO/BooksProject"
+Issues = "https://github.com/ChenHingO/BooksProject/issues"
+Changelog = "https://github.com/ChenHingO/BooksProject/blob/main/CHANGELOG.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "pdfoenix.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["pdfoenix*"]
+
+[tool.setuptools.package-data]
+pdfoenix = ["presets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -26,9 +56,3 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "A", "SIM", "RET", "ARG", "UP", "RUF"]
-
-[tool.setuptools.packages.find]
-include = ["pdfoenix*"]
-
-[tool.setuptools.package-data]
-pdfoenix = ["presets/*"]

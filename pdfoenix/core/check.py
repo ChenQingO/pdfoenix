@@ -6,12 +6,19 @@ page anchors, table/figure references, LaTeX residue, heading anchors).
 
 The report distinguishes ``error`` (fails the build) from ``warning`` (e.g. a
 section whose numbering does not start at 1 is suspicious but not fatal).
+
+``check`` is also the home of the deterministic math gate.  Safe MathML dialect
+rewrites (``\\Bigm`` -> ``\\Big`` and doubled backslashes) are applied in place
+before validation, because otherwise they would reach the EPUB builder.  All
+other math problems are errors with a precise ``file:line`` location.
 """
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pdfoenix.core import mathlint
 from pdfoenix.core.book import Book, natural_key
 from pdfoenix.core.merge import EQ_NUMBER_RE, table_filename
 from pdfoenix.core.pages import PAGE_ANCHOR_RE
@@ -45,6 +52,7 @@ class CheckReport:
 
     issues: list = field(default_factory=list)
     footnotes: int = 0
+    normalized: list = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -53,6 +61,16 @@ class CheckReport:
 
     def add(self, kind, location, message, severity="error"):
         self.issues.append(CheckIssue(kind, location, message, severity))
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Replace ``path`` atomically so an interrupted check leaves no half file."""
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def count_display_equations(text: str) -> int:
@@ -120,6 +138,19 @@ def check_book(book: Book, expected: dict | None = None) -> CheckReport:
     if references.exists():
         for path in sorted(references.glob("*.md"), key=lambda item: natural_key(item.name)):
             all_text[path] = path.read_text(encoding="utf-8")
+
+    # Math gate: apply safe dialect rewrites first, then validate every span
+    # with the same pandoc/texmath path used by the EPUB writer.
+    for path, text in list(all_text.items()):
+        relative = path.relative_to(book.manuscript_dir).as_posix()
+        normalized, changes = mathlint.normalize(text)
+        if changes:
+            _write_text_atomic(path, normalized)
+            all_text[path] = normalized
+            report.normalized.extend(
+                f"{relative}:{change.line}: {change.rule}" for change in changes)
+        for issue in mathlint.lint(normalized):
+            report.add("math", f"{relative}:{issue.line}", issue.message)
 
     # Global: anchor ids, footnote pairing.
     anchors = set()

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python 3.12
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - name: Install pandoc
+        run: |
+          if command -v pandoc >/dev/null 2>&1; then
+            pandoc --version | head -n 1
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install pandoc
+          else
+            sudo apt-get update
+            sudo apt-get install -y pandoc
+          fi
+
+      - name: Install project and dev dependencies
+        run: |
+          uv python install 3.12
+          uv sync --python 3.12 --extra dev
+
+      - name: Lint
+        run: |
+          uv run ruff check pdfoenix tests
+          uv run pylint --disable=all --enable=duplicate-code pdfoenix
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Example book
+        run: |
+          uv run pdfoenix -C examples/sample_book check
+          uv run pdfoenix -C examples/sample_book build --out sample.epub
+
+      - name: Build package
+        run: uv build

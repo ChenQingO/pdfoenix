@@ -1,5 +1,5 @@
 """Figure-cropping and verification-page tests (TDD)."""
-import fitz
+import pymupdf as fitz
 import pytest
 
 from pdfoenix.assets.crop import (

@@ -42,7 +42,7 @@ VERIFY_AGENT = "pdfoenix-verify"
 #: Provider label stored in the ledger (the adapter, not the model vendor).
 PROVIDER_NAME = "opencode"
 
-_DEFAULT_COMMAND = ("npx", "opencode")
+_DEFAULT_COMMAND = ("opencode",)
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _OUTER_FENCE_RE = re.compile(
     r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$", re.DOTALL | re.IGNORECASE)
@@ -189,8 +189,8 @@ class OpenCodeTranscriber:
         Already-loaded configuration.  When omitted, ``config.toml`` is loaded
         from ``book_root`` (falling back to built-in defaults).
     command:
-        CLI prefix.  Defaults to ``("npx", "opencode")``; pass ``("opencode")``
-        when the binary is installed globally.
+        CLI prefix.  Defaults to ``("opencode",)``; install the CLI with
+        ``npm install -g @opencode/cli`` (or another supported method).
     runner:
         Callable with the same keyword arguments as :func:`subprocess.run`.
         Injected by tests to avoid starting a real agent.

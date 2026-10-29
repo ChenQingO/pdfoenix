@@ -77,6 +77,31 @@ def test_equation_registration(tmp_path):
     assert reg["formulas"]["eq3-3-2-2"]["number"] is None
 
 
+def test_merge_materializes_safe_math_rewrites(tmp_path):
+    batch = r"""# Chapter 3. Test Chapter {#ch-3}
+
+## 3.1 Introduction {#sec-3-1}
+
+<!-- page:100 -->
+$$
+a \Bigm| b \qquad (1)
+$$
+
+$$
+\Gamma(\\frac{1}{2}p) \qquad (2)
+$$
+"""
+    book = make_book(tmp_path, {"p100-100": batch})
+    merge_chapter(book, "ch03")
+    text = sec(book, "sec3-1.md")
+    assert r"\Big|" in text
+    assert r"\frac{1}{2}" in text
+    assert r"\Bigm" not in text
+    reg = book.state.load("formulas")
+    assert r"\Bigm" not in reg["formulas"]["eq3-3-1-1"]["latex"]
+    assert r"\\frac" not in reg["formulas"]["eq3-3-1-2"]["latex"]
+
+
 def test_equation_pages_and_risk(tmp_path):
     book = make_book(tmp_path, {"p100-102": BATCH})
     merge_chapter(book, "ch03")

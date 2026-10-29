@@ -43,7 +43,7 @@ class FakeRunner:
                            "timeout": timeout})
         if self.timeout:
             raise subprocess.TimeoutExpired(argv, timeout)
-        if argv[2] == "session":
+        if argv[1] == "session":
             payload = {"info": {"model": self.usage["model"],
                                 "tokens": {key: self.usage[key]
                                            for key in ("input", "output", "reasoning")}}}
@@ -56,7 +56,7 @@ class FakeRunner:
         return subprocess.CompletedProcess(argv, self.returncode, line, self.stderr)
 
     def run_calls(self):
-        return [call for call in self.calls if call["argv"][2] == "run"]
+        return [call for call in self.calls if call["argv"][1] == "run"]
 
 
 def make_images(tmp_path, pages):
@@ -116,7 +116,7 @@ def test_transcribe_single_batch_returns_text_and_records_call(tmp_path, telemet
     calls = runner.run_calls()
     assert len(calls) == 1
     argv = calls[0]["argv"]
-    assert argv[:2] == ["npx", "opencode"]
+    assert argv[0] == "opencode"
     assert "--agent" in argv and "pdfoenix-transcribe" in argv
     assert argv[argv.index("--model") + 1] == "vendor/writer#high"
     assert "--file" in argv
@@ -191,7 +191,7 @@ def test_failed_process_raises_and_is_recorded(tmp_path, telemetry):
 def test_error_event_with_zero_exit_is_a_failure(tmp_path, telemetry):
     class ErrorRunner(FakeRunner):
         def __call__(self, argv, *, cwd, env, timeout):
-            if argv[2] == "run":
+            if argv[1] == "run":
                 line = json.dumps({
                     "type": "error", "sessionID": "ses_err",
                     "error": {"type": "provider.auth", "message": "no credentials"},

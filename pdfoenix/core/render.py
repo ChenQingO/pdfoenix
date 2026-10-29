@@ -7,7 +7,7 @@ deterministic; it never calls a model.
 """
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 
 class RenderError(ValueError):

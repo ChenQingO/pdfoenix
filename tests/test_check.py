@@ -206,3 +206,36 @@ def test_unresolved_figure_placeholder_is_reported(tmp_path):
     }
     report = check_book(make(tmp_path, files))
     assert "object_placeholder" in kinds(report)
+
+
+def test_safe_math_rewrite_is_applied_and_not_reported(tmp_path):
+    files = dict(CLEAN_FILES)
+    files["sec3-1.md"] = (
+        "## 3.1 Intro {#sec-3-1}\n\n"
+        "$$\na \\Bigm| b \\qquad (1)\n$$\n")
+    book = make(tmp_path, files, formulas=regs("3.1"))
+    report = check_book(book)
+    assert "math" not in kinds(report)
+    assert report.normalized
+    assert r"\Big|" in (book.manuscript_dir / "ch03" / "sec3-1.md").read_text()
+
+
+def test_bad_math_is_a_check_error(tmp_path):
+    files = dict(CLEAN_FILES)
+    files["sec3-1.md"] = (
+        "## 3.1 Intro {#sec-3-1}\n\n"
+        "A bare $\\boldsymbol$ command.\n\n"
+        "$$\nx = 1 \\qquad (1)\n$$\n")
+    report = check_book(make(tmp_path, files, formulas=regs("3.1")))
+    assert "math" in kinds(report)
+    assert any("argument" in issue.message for issue in report.issues)
+
+
+def test_unbalanced_math_brace_is_a_check_error(tmp_path):
+    files = dict(CLEAN_FILES)
+    files["sec3-1.md"] = (
+        "## 3.1 Intro {#sec-3-1}\n\n"
+        "$$\nx{y{z} \\qquad (1)\n$$\n")
+    report = check_book(make(tmp_path, files, formulas=regs("3.1")))
+    assert "math" in kinds(report)
+    assert any("unbalanced" in issue.message for issue in report.issues)

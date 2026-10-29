@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pdfoenix.core import mathlint
 from pdfoenix.core.anchors import add_anchors, anchor_ids, parse_reference_entries, resolve_links
 from pdfoenix.core.book import Book
 from pdfoenix.core.config import risk_weights
@@ -442,6 +443,9 @@ def merge_chapter(book: Book, chapter: str, telemetry=None, *,
 
     stream = _read_chapter_stream(book, chapter)
     stream = strip_comments(stream)
+    # Materialize safe MathML dialect rewrites before formulas are registered,
+    # so the manuscript and state/formulas.json never disagree about the TeX.
+    stream, _ = mathlint.normalize(stream)
     stream, footnote_defs = extract_footnote_defs(stream)
 
     # Pull the chapter title out of the stream (first "# Chapter" line).

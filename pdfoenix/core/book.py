@@ -150,7 +150,7 @@ class Book:
 
     def pdf_page_count(self) -> int:
         """Number of pages in the source PDF."""
-        import fitz
+        import pymupdf as fitz
 
         with fitz.open(self.pdf()) as doc:
             return doc.page_count

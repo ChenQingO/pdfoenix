@@ -1,7 +1,7 @@
 """Dashboard tests (TDD)."""
 import io
 
-import fitz
+import pymupdf as fitz
 import pytest
 
 from pdfoenix.core.book import Book

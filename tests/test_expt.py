@@ -4,7 +4,7 @@ import re
 import shutil
 from typing import ClassVar
 
-import fitz
+import pymupdf as fitz
 import pytest
 
 from pdfoenix import combo, expt

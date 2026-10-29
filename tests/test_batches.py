@@ -46,5 +46,4 @@ def test_repeated_matrix_rows_are_not_a_restart():
 def test_stream_checks_math_and_environments():
     issues = validate_stream(["<!-- page:1 -->\n\n$$\nx = 1\n\n"
                               "$$\\begin{aligned}x\\end{aligned}$$$"])
-    found = kinds(issues)
-    assert "math-delimiter" in found or "environment" in found
+    assert "math" in kinds(issues)

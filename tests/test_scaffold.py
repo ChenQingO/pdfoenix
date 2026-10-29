@@ -1,5 +1,5 @@
 """Scaffolding/init tests (TDD)."""
-import fitz
+import pymupdf as fitz
 import pytest
 
 from pdfoenix.core.book import Book
@@ -49,6 +49,24 @@ def test_scaffold_is_idempotent_and_preserves_config(tmp_path):
                            encoding="utf-8")
     scaffold_book(root)
     assert Book(root).config["book"]["title"] == "Edited"
+
+
+def test_scaffold_refreshes_text_presets_but_not_css(tmp_path):
+    pdf = tmp_path / "book.pdf"
+    make_pdf(pdf)
+    root = tmp_path / "demo"
+    scaffold_book(root, pdf=pdf, title="First")
+    preset = root / "presets" / "transcribe.md"
+    style = root / "styles" / "epub.css"
+    preset.write_text("stale task book\n", encoding="utf-8")
+    style.write_text("book-owned css\n", encoding="utf-8")
+    (root / "presets" / "epub.css").write_text("preset css\n", encoding="utf-8")
+
+    scaffold_book(root)
+
+    assert "MathML (texmath) dialect" in preset.read_text(encoding="utf-8")
+    assert style.read_text(encoding="utf-8") == "book-owned css\n"
+    assert (root / "presets" / "epub.css").read_text(encoding="utf-8") == "preset css\n"
 
 
 def test_scaffold_rejects_missing_pdf(tmp_path):

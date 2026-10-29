@@ -1,5 +1,5 @@
 """Structure reconnaissance tests (TDD)."""
-import fitz
+import pymupdf as fitz
 
 from pdfoenix.core.book import Book
 from pdfoenix.core.scout import scout_book, scout_pdf

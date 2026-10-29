@@ -401,6 +401,8 @@ def cmd_check(args) -> int:
         print(f"{issue.severity}: {issue.location}: {issue.message}")
     if args.all:
         print(f"doctor: {doctor_errors} error(s)")
+    if report.normalized:
+        print(f"normalized: {len(report.normalized)} safe math rewrite(s)")
     print(f"check: {len(report.issues)} issue(s), {report.footnotes} footnote(s)")
     return 0 if report.ok and doctor_errors == 0 else 1
 

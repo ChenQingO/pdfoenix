@@ -61,7 +61,9 @@ the PDF page number of every attachment. Read **all** images before writing.
 - Inline mathematics: `$...$`. Display mathematics: `$$` on its own line, the
   LaTeX body, then `$$` on its own line.
 - Multi-line displays use `\begin{aligned} ... \end{aligned}` and break at
-  operators. MathML does not wrap, so keep lines reasonably short.
+  operators. MathML readers do not reliably wrap long formulas, so keep each
+  display line reasonably short. Never compress an `aligned` derivation onto
+  one line.
 - **Keep the printed equation number**: put `\qquad (N)` on the last line of the
   display. Never use `\tag{}`; it is silently dropped.
 - Rules display equations with no printed number are left unnumbered.
@@ -70,6 +72,40 @@ the PDF page number of every attachment. Read **all** images before writing.
 - Use LaTeX for symbols, not Unicode lookalikes, except for the QED symbol above.
 - Preserve delimiters, primes, hats, bars, tildes, subscripts and superscripts
   exactly as printed.
+
+### MathML (texmath) dialect
+
+The book is rendered by pandoc's texmath to MathML, not by KaTeX. texmath
+accepts a narrower dialect, so stick to the forms below.
+
+- Always give `\boldsymbol` an argument: `\boldsymbol{x}`, never a bare
+  `\boldsymbol`.
+- Use `\Big|`, `\Bigg|`, `\big|`, `\bigg|`; never `\Bigm`, `\Biggm`, `\bigm`
+  or `\biggm`.
+- Never use `\bold`; it is not a LaTeX command. Use `\boldsymbol{...}` or
+  `\mathbf{...}`.
+- Use `\frac`, not `\cfrac`. Never use `\over`, `\atop`, `\choose` or
+  `\genfrac`.
+- Do not use `\tag`, `\label`, `\eqref`, `\nonumber` or `\notag`; equation
+  numbers are always `\qquad (N)` as described above.
+- Do not use style switches (`\displaystyle`, `\textstyle`, `\scriptstyle`,
+  `\scriptscriptstyle`) or layout-only commands (`\phantom`, `\hphantom`,
+  `\vphantom`, `\smash`, `\llap`, `\rlap`, `\mathclap`, `\boxed`, `\fbox`,
+  `\rule`, `\raisebox`).
+- Do not use colour commands (`\color`, `\textcolor`, `\colorbox`).
+- `\\` is a row break inside `aligned`, `matrix`, `cases` and similar
+  environments. It is never written directly before a command: write
+  `\frac`, not `\\frac`.
+- Keep multi-line displays multi-line. Do not join them into one line to save
+  space; add a row break at a top-level operator instead.
+
+Before returning, check every formula:
+
+1. every `$` and `$$` has a pair;
+2. every `{` has a matching `}`;
+3. every `\begin{...}` has a matching `\end{...}`;
+4. no command is left without its argument;
+5. no doubled backslash stands before a command name.
 
 ### Notation roles
 

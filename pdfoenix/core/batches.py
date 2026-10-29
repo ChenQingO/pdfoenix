@@ -10,6 +10,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from pdfoenix.core import mathlint
 from pdfoenix.core.pages import PAGE_ANCHOR_RE, PAGE_LINE_RE
 
 PROSE_RE = re.compile(r"[A-Za-z]{3,}[^$\\|<>]*\s+[A-Za-z]{3,}")
@@ -29,11 +30,24 @@ class BatchIssue:
     message: str
 
 
+def _math_issues(text: str, location: str, *,
+                 allow_incomplete: bool) -> list[BatchIssue]:
+    """Run the shared math gate on already-normalized text."""
+    return [
+        BatchIssue("error", "math", f"{location}:{issue.line}", issue.message)
+        for issue in mathlint.lint(text, allow_incomplete=allow_incomplete)
+    ]
+
+
 def validate_batch_text(text: str, first: int, last: int, *,
                         location: str = "batch",
                         require_all_pages: bool = True) -> list[BatchIssue]:
     """Validate one batch against the page window it was asked to transcribe."""
     issues: list[BatchIssue] = []
+    # Safe dialect rewrites are applied in memory; the batch file itself is
+    # written by the caller, while merge/check materialize the same rewrites.
+    text, _ = mathlint.normalize(text)
+    issues.extend(_math_issues(text, location, allow_incomplete=True))
     lines = text.splitlines()
 
     strict = [(index + 1, int(match.group(1)))
@@ -96,24 +110,14 @@ def validate_batch_text(text: str, first: int, last: int, *,
 
 
 def validate_stream(texts: list[str], *, location: str = "chapter") -> list[BatchIssue]:
-    """Validate invariants that only make sense across a whole chapter stream."""
-    issues: list[BatchIssue] = []
-    joined = "\n\n".join(texts)
-    lines = joined.splitlines()
+    """Validate invariants that only make sense across a whole chapter stream.
 
-    if sum(1 for line in lines if line.strip() == "$$") % 2:
-        issues.append(BatchIssue(
-            "error", "math-delimiter", location,
-            "unbalanced display-math delimiters across the chapter"))
-    begins = Counter(re.findall(r"\\begin\{([^}]+)\}", joined))
-    ends = Counter(re.findall(r"\\end\{([^}]+)\}", joined))
-    for name in sorted(set(begins) | set(ends)):
-        if begins[name] != ends[name]:
-            issues.append(BatchIssue(
-                "error", "environment", location,
-                f"unbalanced \\begin{{{name}}}/\\end{{{name}}}: "
-                f"{begins[name]}/{ends[name]}"))
-    return issues
+    Math delimiter, brace, environment and texmath checks come from the shared
+    :mod:`pdfoenix.core.mathlint` gate, so a batch and the merged manuscript
+    cannot disagree about what is broken.
+    """
+    joined, _ = mathlint.normalize("\n\n".join(texts))
+    return _math_issues(joined, location, allow_incomplete=False)
 
 
 def chapter_issues(book, chapter: str) -> list[BatchIssue]:

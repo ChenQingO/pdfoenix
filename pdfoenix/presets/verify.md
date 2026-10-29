@@ -32,6 +32,8 @@ equation, captions, tables, footnotes, cross-references, headings):
 9. A genuinely damaged or misprinted source that the transcriber "fixed":
    this is `faithful` when the transcription reproduces the print, and
    `introduced` when the transcription silently changes it.
+10. Malformed TeX: a missing `$`, a command glued to the following word,
+    unbalanced braces, or a command that cannot render.
 
 Ignore purely cosmetic Markdown choices that do not change meaning, except when
 they break the book's required conventions. The required heading forms are

@@ -1,5 +1,5 @@
 """Page rendering tests (TDD)."""
-import fitz
+import pymupdf as fitz
 import pytest
 
 from pdfoenix.core.render import (

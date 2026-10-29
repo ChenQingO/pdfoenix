@@ -2,7 +2,8 @@
 # Bootstrap the local development environment only.
 #
 # This script installs uv, creates a project-local .venv, installs pdfoenix,
-# and makes sure pandoc/opencode exist. It never runs a book pipeline.
+# and makes sure pandoc and the OpenCode CLI exist. It never runs a book
+# pipeline and never writes secrets.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +16,7 @@ Usage:
   ./start.sh --help
 
 Environment: uv + .venv. Conda is not used.
+Windows: run this script inside WSL.
 EOF
 }
 
@@ -65,6 +67,11 @@ if ! command -v opencode >/dev/null 2>&1; then
   fi
 fi
 
+echo
+echo "==> Installed versions"
+pandoc --version | head -n 1
+opencode --version
+
 cat <<EOF
 
 Environment ready.
@@ -72,17 +79,20 @@ Environment ready.
 Activate it in this shell:
   source .venv/bin/activate
 
-Model gateway (project-local, no global OpenCode changes needed):
-  export MIMO_API_KEY="your-key"
-  After "pdfoenix init", edit books/<book>/presets/opencode.jsonc
-  and set providers.mimo.settings.baseURL to your gateway.
-  Do not edit ~/.config/opencode/opencode.jsonc.
+The generated book config is the only file you edit:
+  books/<book>/config.toml
 
-Then create a book and run the pipeline yourself:
+Put model keys in the environment, never in a file:
+  export MIMO_API_KEY="your-key"
+  export DEEPSEEK_API_KEY="your-key"
+
+Create a book and run the pipeline:
   pdfoenix init books/my_book --pdf /path/to/book.pdf --title "Title" --author "Author" --page-offset 0
-  pdfoenix -C books/my_book scout
   pdfoenix -C books/my_book transcribe --chapter ch01
   pdfoenix -C books/my_book merge --chapter ch01
   pdfoenix -C books/my_book verify --chapter ch01 --full
+  pdfoenix -C books/my_book check --all
   pdfoenix -C books/my_book build
+
+Contributor setup and tests are described in CONTRIBUTING.md.
 EOF

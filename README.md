@@ -15,6 +15,8 @@
 ![uv](https://img.shields.io/badge/uv-package%20manager-8A2BE2)
 ![pandoc](https://img.shields.io/badge/pandoc-EPUB-7a4f1d)
 ![status](https://img.shields.io/badge/status-alpha-orange)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
+![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-green)
 
 ---
 
@@ -51,8 +53,8 @@ PDF
  ├─ transcribe 逐页转写（自动侦察/渲染，写盘前校验）
  ├─ merge      合并、锚点/链接、裁图
  ├─ verify     另一模型抽样复核
- ├─ check      本地规则校验（`--all` 连批次/图/进度一起体检）
- ├─ build      pandoc 生成 EPUB
+ ├─ check      本地规则 + 数学门禁（`--all` 连批次/图/进度一起体检）
+ ├─ build      pandoc 生成 EPUB（只构建，不做内容校验）
  └─ inspect    检查 EPUB 结构
 ```
 
@@ -69,12 +71,14 @@ PDF
 | 模型网关                         | 转写 / 复核    | 任意 OpenCode 支持的 provider |
 
 > PDF 需带**文字层**（供章节结构侦察）；纯图片扫描件请先 OCR，如 `ocrmypdf input.pdf output.pdf`。
+>
+> Windows 请在 WSL 中运行 `start.sh`；macOS 与 Linux 直接运行即可。
 
 ### 一键配置环境
 
 ```bash
-git clone https://github.com/<your-name>/pdfoenix.git
-cd pdfoenix
+git clone https://github.com/ChenHingO/BooksProject.git
+cd BooksProject
 ./start.sh
 source .venv/bin/activate
 ```
@@ -128,6 +132,19 @@ pdfoenix -C books/my_book inspect
 ```
 
 产物在 `books/my_book/build/book.epub`。
+
+不想先准备一本真书？仓库里有一个**无版权、无 API key** 的合成示例：
+
+```bash
+pdfoenix -C examples/sample_book check
+pdfoenix -C examples/sample_book build --out sample.epub
+```
+
+也可以生成一个带文字层的合成 PDF，用来测试 `init`/转写流程：
+
+```bash
+python examples/make_sample_pdf.py /tmp/pdfoenix-sample.pdf
+```
 
 ### 可选：封面
 
@@ -187,7 +204,9 @@ cd books/my_book && pdfoenix check     # 等价写法
 | 1      | 跑完了，但发现问题（校验未通过/实验有失败） | `check`、`inspect`、`expt run` |
 | 2      | 用法错误或运行时错误                        | 全部                           |
 
-只读命令（**从不改文件、从不花钱**）：`watch`、`report cost|quality|risk`、`check`、`inspect`、`expt show`。
+只读命令（**从不改文件、从不花钱**）：`watch`、`report cost|quality|risk`、`inspect`、`expt show`。
+`check` 会就地应用安全的 MathML 方言替换（`\Bigm` → `\Big`、双反斜杠），
+其余内容只报告、不改写。
 花钱的只有两个模型调用点：`transcribe`、`verify`（以及 `expt run`）。
 
 > 所有命令均可用 `pdfoenix <command> --help` 查看完整参数。
@@ -198,7 +217,8 @@ cd books/my_book && pdfoenix check     # 等价写法
 
 脚手架：目录结构、`config.toml`（只写与默认值不同的项）、预设、空注册表。
 `TARGET` 是书目录（省略时用 `-C`）；`--page-offset` 满足 `PDF 页 = 印刷页 + offset`。
-模型组合在 `config.toml` 里手写（见[配置](#配置)中的「组合」一节）。
+目录已存在时，`init` 会刷新文本 preset（任务书、单价、配置参考），但不动
+`config.toml`、书稿、状态和 CSS。模型组合在 `config.toml` 里手写（见[配置](#配置)中的「组合」一节）。
 
 #### `pdfoenix transcribe [--chapter chNN] [--pages SPEC] [--force]`
 
@@ -249,7 +269,11 @@ cd books/my_book && pdfoenix check     # 等价写法
 
 本地规则校验：公式编号连续性、脚注配平、交叉链接、注册表一致性、残留
 （`\tag{}`、裸 `■`、`\mathcal`）、标题锚点、重复锚点 id、未解析的 FIGURE 占位符。
-锚点既识别标题的 `{#id}`，也识别合并生成的 `<span id="…">`。有错误时退出码 1。
+锚点既识别标题的 `{#id}`，也识别合并生成的 `<span id="…">`。
+
+数学门禁：先就地应用安全的 MathML 方言替换（`\Bigm` → `\Big`、双反斜杠），
+再用 pandoc/texmath 校验每个公式；缺参数、缺 `$`、花括号/环境不平衡、
+texmath 无法渲染都是 error，并给出 `文件:行号`。有错误时退出码 1。
 
 `--all` 额外做全链路体检：批次完整性（缺页/重复/行内锚点、重启残片、章节流
 `$$`/环境配对）、悬空链接的候选目标、图片文件/裁图框/页码、失败单元。
@@ -605,7 +629,7 @@ $0.05 · 2 calls · 104k tokens · 2 agents active · 5/5 pages verified · 2 co
 ```text
 pdfoenix/          # 包源代码
 ├── core/          # 确定性内核（无 LLM）：book/config/state/pages/telemetry/
-│                  #   risk/scout/render/merge/check/build/postprocess
+│                  #   risk/mathlint/scout/render/merge/check/build/postprocess
 ├── combo.py       # 模型组合：provider/combo 配置、active combo、opencode 配置生成
 ├── pipeline.py    # 共享编排原语：渲染补缺、转写窗口、复核页图、进度、纠错落账
 ├── transcribe/    # Transcriber 协议 + OpenCode 适配
@@ -620,6 +644,9 @@ pdfoenix/          # 包源代码
 ├── cli.py         # 命令编排
 └── presets/       # epub.css / opencode.jsonc（agent 骨架模板）/ 任务书 / 单价 / 配置参考
 tests/             # 单元与集成测试
+examples/          # 无版权示例书与合成 PDF 生成器
+.github/           # CI、issue / PR 模板
+LICENSE            # AGPL-3.0-or-later
 start.sh           # 环境配置脚本
 ```
 
@@ -635,6 +662,7 @@ pylint --disable=all --enable=duplicate-code pdfoenix
 ```
 
 约定：注释与 docstring 用英文；每个模块配套测试；禁止 `\tag{}`、裸 `■`、无锚点标题。
+贡献流程、真实书稿不得入库、密钥处理等见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 设计文档
 
@@ -642,4 +670,7 @@ pylint --disable=all --enable=duplicate-code pdfoenix
 
 ## License
 
-（待定）
+[GNU Affero General Public License v3.0 or later](LICENSE)（AGPL-3.0-or-later）。
+
+选择 AGPL 是因为核心依赖 **PyMuPDF** 采用 AGPL-3.0 / Artifex 商业双许可。若你需要闭源分发，
+需要自行取得 PyMuPDF 商业许可，或替换为许可兼容的 PDF 渲染实现。
