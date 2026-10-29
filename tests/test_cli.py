@@ -204,6 +204,21 @@ def test_every_command_has_help(command):
     assert exc.value.code == 0
 
 
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip().startswith("pdfoenix 0.4.0")
+
+
+def test_example_book_checks_and_builds():
+    sample = Book("examples/sample_book")
+    assert main(["-C", str(sample.root), "check"]) == 0
+    assert main(["-C", str(sample.root), "build",
+                 "--out", "sample.epub"]) == 0
+    assert (sample.build_dir / "sample.epub").exists()
+
+
 def test_unknown_command_or_flag_exits_2():
     with pytest.raises(SystemExit) as exc:
         main(["frobnicate"])

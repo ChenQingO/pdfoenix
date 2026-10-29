@@ -27,9 +27,9 @@ import sys
 import time
 from pathlib import Path
 
+from pdfoenix import __version__, pipeline
 from pdfoenix import combo as combo_mod
 from pdfoenix import expt as expt_mod
-from pdfoenix import pipeline
 from pdfoenix.assets.crop import crop_figures
 from pdfoenix.core.batches import validate_batch_text
 from pdfoenix.core.book import Book
@@ -67,6 +67,8 @@ def main(argv=None) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pdfoenix")
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     parser.add_argument("-C", "--book", default=".", help="book directory (default: .)")
     parser.add_argument("--debug", action="store_true", help="show a traceback on failure")
     sub = parser.add_subparsers(dest="command", required=True)
