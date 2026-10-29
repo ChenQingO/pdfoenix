@@ -219,8 +219,9 @@ units** (including refreshing those units' cached inputs, such as page images):
 | 1    | ran fine but found issues (checks failed / cells) | `check`, `inspect`, `expt run` |
 | 2    | usage error or runtime error                      | all                            |
 
-Read-only commands (**never write files, never spend money**): `watch`, `report cost|quality|risk`,
-`inspect`, `expt show`. `check` applies safe MathML dialect rewrites in place
+Read-only commands (**never write files, never spend money**): `watch`, `report cost|risk`,
+`inspect`, `expt show`. `report quality` creates the experiment workspace and writes
+`expt/report.md`. `check` applies safe MathML dialect rewrites in place
 (`\Bigm` → `\Big`, doubled backslashes); everything else is report-only.
 Only two commands call models: `transcribe` and `verify` (plus `expt run`).
 

@@ -143,7 +143,7 @@ pdfoenix inspect [EPUB]                   # EPUB 验收抽查
 # 状态（只读）
 pdfoenix watch [--interval SEC] [--once]  # 实时看板
 
-# 报告（只读）
+# 报告（cost/risk 只读；quality 写入 expt/report.md）
 pdfoenix report cost [--by model|chapter] # 成本汇总
 pdfoenix report quality [--all]           # 成本-质量对比 + expt/report.md
 pdfoenix report risk                      # 公式/页风险分布（标定用）

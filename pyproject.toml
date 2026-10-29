@@ -49,6 +49,9 @@ pdfoenix = ["presets/*"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+filterwarnings = [
+    "ignore:builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100

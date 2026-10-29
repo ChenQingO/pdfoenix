@@ -172,6 +172,35 @@ def test_cli_transcribe_pages_selection(tmp_path, monkeypatch):
     assert not (batches / "p1-3.md").exists()
 
 
+def test_cli_rerender_respects_chapter_and_page_scope(tmp_path, monkeypatch):
+    root = init_book(tmp_path)
+    book = Book(root)
+    book.state.save("scout", {
+        "page_offset": 0,
+        "chapters": [
+            {"number": "1", "title": "First", "pdf_page": 1},
+            {"number": "2", "title": "Second", "pdf_page": 3},
+        ],
+        "sections": [],
+        "figures": [],
+        "tables": [],
+        "equations": [],
+    })
+    batch_dir = book.batches_dir / "ch01"
+    batch_dir.mkdir(parents=True)
+    (batch_dir / "p2-2.md").write_text("already complete\n", encoding="utf-8")
+    rerendered = []
+    monkeypatch.setattr("pdfoenix.pipeline.make_transcriber",
+                        lambda _book, _telemetry: FakeTranscriber())
+    monkeypatch.setattr("pdfoenix.cli.render_pages",
+                        lambda _pdf, pages, _dpi, _directory:
+                        rerendered.extend(pages))
+
+    assert main(["-C", str(root), "transcribe", "--chapter", "ch01",
+                 "--pages", "2-3", "--rerender"]) == 0
+    assert rerendered == [2]
+
+
 def test_cli_verify_pages(tmp_path, monkeypatch):
     root = init_book(tmp_path)
 

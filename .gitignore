@@ -6,6 +6,11 @@ books/
 .idea/
 .vscode/
 
+# Secrets
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.py[cod]

@@ -110,10 +110,22 @@ def assemble_markdown(book: Book) -> str:
 
 def build_book(book: Book, out_name: str = "book.epub") -> Path:
     """Assemble, run pandoc, post-process, and return the EPUB path."""
+    out_dir = book.build_dir.resolve()
+    relative_out = Path(out_name)
+    if relative_out.is_absolute():
+        raise BuildError("--out must be a relative path inside build/")
+    out = (out_dir / relative_out).resolve()
+    if out == out_dir:
+        raise BuildError("--out must name a file inside build/")
+    try:
+        out.relative_to(out_dir)
+    except ValueError as exc:
+        raise BuildError("--out must stay inside build/") from exc
+
     book.build_dir.mkdir(parents=True, exist_ok=True)
     markdown_path = book.build_dir / "book.md"
     markdown_path.write_text(assemble_markdown(book), encoding="utf-8")
-    out = book.build_dir / out_name
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     command = [
         _pandoc(), str(markdown_path), "-o", str(out),

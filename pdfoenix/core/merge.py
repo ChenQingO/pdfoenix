@@ -95,25 +95,6 @@ def strip_comments(text: str) -> str:
     return "\n".join(kept)
 
 
-def sub_re(pattern, replacement, text, flags=0) -> str:
-    """``re.sub`` with safe replacement semantics.
-
-    ``\\1``..``\\9`` expand to capture groups, while every other backslash is
-    kept literally.  This is important because replacements are full of LaTeX
-    (``\\boldsymbol`` etc.), which ``re.sub`` would otherwise treat as escapes.
-    """
-    def expand(match):
-        out = replacement
-        for index in range(9, 0, -1):
-            token = f"\\{index}"
-            if token in out:
-                group = match.group(index) if index <= (match.re.groups or 0) else None
-                out = out.replace(token, group if group is not None else token)
-        return out
-
-    return re.sub(pattern, expand, text, flags=flags)
-
-
 def extract_footnote_defs(text: str):
     """Split single-line footnote definitions out of the text.
 

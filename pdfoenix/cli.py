@@ -9,7 +9,7 @@ Command groups
 * pipeline stages: ``init transcribe merge verify check build inspect`` —
   plain verbs, one outcome each;
 * status: ``watch`` (read-only dashboard);
-* reports: ``report cost|quality|risk`` (read-only analysis);
+* reports: ``report cost|quality|risk`` (``quality`` writes ``expt/report.md``);
 * experiments: ``expt show|run`` (only ``run`` spends money).
 
 Cross-cutting rules (documented in the README handbook):
@@ -130,8 +130,8 @@ def _build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--once", action="store_true", help="print one frame and exit")
     watch.set_defaults(func=cmd_watch)
 
-    # ── Reports (read-only) ─────────────────────────────────────────────
-    report = sub.add_parser("report", help="read-only cost/quality/risk reports")
+    # ── Reports ─────────────────────────────────────────────────────────
+    report = sub.add_parser("report", help="cost, quality and risk reports")
     report_sub = report.add_subparsers(dest="report_command", required=True)
 
     cost = report_sub.add_parser("cost", help="token and cost totals")
@@ -139,7 +139,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cost.set_defaults(func=cmd_report_cost)
 
     quality = report_sub.add_parser(
-        "quality", help="experiment cost-quality comparison (writes expt/report.md)")
+        "quality", help="write experiment cost-quality comparison to expt/report.md")
     quality.add_argument("--all", action="store_true",
                          help="include combos no longer in their batch")
     quality.set_defaults(func=cmd_report_quality)
@@ -207,9 +207,11 @@ def cmd_transcribe(args) -> int:
     if wanted is not None and not wanted:
         raise ValueError(f"no pages match: {args.pages}")
     if getattr(args, "rerender", False):
-        pages = sorted(wanted) if wanted is not None else [
+        pages = [
             page for start, end in ranges.values()
-            for page in range(start, end + 1)]
+            for page in range(start, end + 1)
+            if wanted is None or page in wanted
+        ]
         render_pages(book.pdf(), pages,
                      book.config["pipeline"]["render_dpi"], book.pages_dir)
     size = book.config["pipeline"]["batch_pages"]

@@ -1,8 +1,15 @@
 """Build tests (TDD): assembly, table inlining, end-to-end EPUB."""
 import zipfile
 
+import pytest
+
 from pdfoenix.core.book import Book
-from pdfoenix.core.build import assemble_markdown, build_book, inline_tables
+from pdfoenix.core.build import (
+    BuildError,
+    assemble_markdown,
+    build_book,
+    inline_tables,
+)
 
 
 def make_book(tmp_path, files):
@@ -64,3 +71,14 @@ def test_build_epub_end_to_end(tmp_path):
     # nav must be removed from the spine
     opf = next(n for n in names if n.endswith(".opf"))
     assert 'itemref idref="nav"' not in z.read(opf).decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    "out_name", ["../outside.epub", "/tmp/outside.epub", "."])
+def test_build_rejects_invalid_output_path(tmp_path, out_name):
+    book = make_book(tmp_path, {})
+
+    with pytest.raises(BuildError, match="inside build"):
+        build_book(book, out_name=out_name)
+
+    assert not (book.build_dir / "book.md").exists()

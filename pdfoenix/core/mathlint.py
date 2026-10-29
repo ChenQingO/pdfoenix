@@ -442,9 +442,3 @@ def lint(text: str, *, allow_incomplete: bool = False) -> list[MathIssue]:
             checked.append(span)
     issues.extend(_texmath_failures(checked))
     return issues
-
-
-def lint_file(path: Path, *, allow_incomplete: bool = False) -> list[MathIssue]:
-    """Convenience wrapper for a single file."""
-    return lint(path.read_text(encoding="utf-8"),
-                allow_incomplete=allow_incomplete)

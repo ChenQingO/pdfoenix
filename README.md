@@ -204,7 +204,8 @@ cd books/my_book && pdfoenix check     # 等价写法
 | 1      | 跑完了，但发现问题（校验未通过/实验有失败） | `check`、`inspect`、`expt run` |
 | 2      | 用法错误或运行时错误                        | 全部                           |
 
-只读命令（**从不改文件、从不花钱**）：`watch`、`report cost|quality|risk`、`inspect`、`expt show`。
+只读命令（**从不改文件、从不花钱**）：`watch`、`report cost|risk`、`inspect`、`expt show`。
+`report quality` 会创建实验工作区并写入 `expt/report.md`。
 `check` 会就地应用安全的 MathML 方言替换（`\Bigm` → `\Big`、双反斜杠），
 其余内容只报告、不改写。
 花钱的只有两个模型调用点：`transcribe`、`verify`（以及 `expt run`）。
