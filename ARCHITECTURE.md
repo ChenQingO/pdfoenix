@@ -81,7 +81,7 @@ pdfoenix/                       # 源代码区（包）
 ### 4.1 仓库（源代码区 + 图书区）
 
 ```
-BooksProject/
+pdfoenix/
 ├── ARCHITECTURE.md             # 本文档
 ├── pdfoenix/                   # ★ 源代码区（包，见 §3）
 ├── books/                      # ★ 图书区（纯数据，非代码）

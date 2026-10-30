@@ -31,10 +31,10 @@ dev = ["pytest>=8", "ruff>=0.5", "pylint>=3"]
 pdfoenix = "pdfoenix.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/ChenHingO/BooksProject"
-Repository = "https://github.com/ChenHingO/BooksProject"
-Issues = "https://github.com/ChenHingO/BooksProject/issues"
-Changelog = "https://github.com/ChenHingO/BooksProject/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ChenQingO/pdfoenix"
+Repository = "https://github.com/ChenQingO/pdfoenix"
+Issues = "https://github.com/ChenQingO/pdfoenix/issues"
+Changelog = "https://github.com/ChenQingO/pdfoenix/blob/main/CHANGELOG.md"
 
 [tool.setuptools.dynamic]
 version = { attr = "pdfoenix.__version__" }

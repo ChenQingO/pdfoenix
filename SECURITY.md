@@ -10,7 +10,7 @@ currently in the `0.4.x` alpha series.
 Please do **not** open a public issue for a vulnerability. Use GitHub's private
 vulnerability reporting:
 
-<https://github.com/ChenHingO/BooksProject/security/advisories/new>
+<https://github.com/ChenQingO/pdfoenix/security/advisories/new>
 
 Include the affected version, a minimal reproduction, and the impact. We will
 acknowledge the report and coordinate a fix and disclosure.

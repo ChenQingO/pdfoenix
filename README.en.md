@@ -82,8 +82,8 @@ PDF
 ### One-shot environment setup
 
 ```bash
-git clone https://github.com/ChenHingO/BooksProject.git
-cd BooksProject
+git clone https://github.com/ChenQingO/pdfoenix.git
+cd pdfoenix
 ./start.sh
 source .venv/bin/activate
 ```
